@@ -1,6 +1,9 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
 import 'dart:math';
+import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class LogsPage extends StatefulWidget {
   const LogsPage({super.key});
@@ -10,7 +13,6 @@ class LogsPage extends StatefulWidget {
 }
 
 class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin {
-  // High-Contrast Aquatic Palette
   final Color tealLight = const Color(0xFFE6FFF9);
   final Color teal = const Color(0xFF0D9488);
   final Color tealDark = const Color(0xFF0F766E);
@@ -19,17 +21,20 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
   final Color textMuted = const Color(0xFF6B7280);
 
   late AnimationController _fadeController;
+  StreamSubscription<QuerySnapshot>? _logsSub;
 
-  // Mock Data Storage
-  final List<Map<String, dynamic>> ulangLogs = [];
-  final List<Map<String, dynamic>> plantLogs = [];
+  List<QueryDocumentSnapshot> _ulangLogs = [];
+  List<QueryDocumentSnapshot> _plantLogs = [];
+  bool _isLoading = true;
+  bool _isSavingUlang = false;
+  bool _isSavingPlant = false;
 
-  // Controllers - Ulang
+  // Ulang form controllers
   final sizeController = TextEditingController();
   final weightController = TextEditingController();
   DateTime selectedDate = DateTime.now();
 
-  // Controllers - Plant
+  // Plant form controllers
   final plantHeightController = TextEditingController();
   final plantConditionController = TextEditingController();
   String? selectedPlantStage;
@@ -43,10 +48,38 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
       duration: const Duration(milliseconds: 600),
       vsync: this,
     )..forward();
+    _subscribeLogs();
+  }
+
+  void _subscribeLogs() {
+    _logsSub = FirebaseFirestore.instance
+        .collection('logs')
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .listen(
+      (snapshot) {
+        if (!mounted) return;
+        setState(() {
+          _isLoading = false;
+          _ulangLogs = snapshot.docs.where((d) {
+            final data = d.data() as Map<String, dynamic>;
+            return data['type'] == 'ulang';
+          }).toList();
+          _plantLogs = snapshot.docs.where((d) {
+            final data = d.data() as Map<String, dynamic>;
+            return data['type'] == 'plant';
+          }).toList();
+        });
+      },
+      onError: (_) {
+        if (mounted) setState(() => _isLoading = false);
+      },
+    );
   }
 
   @override
   void dispose() {
+    _logsSub?.cancel();
     _fadeController.dispose();
     sizeController.dispose();
     weightController.dispose();
@@ -56,62 +89,114 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
   }
 
   // =======================
+  // Save Handlers
+  // =======================
+
+  Future<void> _saveUlangLog() async {
+    if (_isSavingUlang) return;
+    if (sizeController.text.trim().isEmpty || weightController.text.trim().isEmpty) return;
+    setState(() => _isSavingUlang = true);
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+      await FirebaseFirestore.instance.collection('logs').add({
+        'title': 'Ulang Log',
+        'description': 'Laki: ${sizeController.text.trim()}cm • Timbang: ${weightController.text.trim()}g',
+        'type': 'ulang',
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdBy': uid,
+        'size': sizeController.text.trim(),
+        'weight': weightController.text.trim(),
+        'observedAt': Timestamp.fromDate(selectedDate),
+      });
+      sizeController.clear();
+      weightController.clear();
+      _showSuccessSnackbar("Matagumpay na na-save ang tala ng Ulang.");
+    } finally {
+      if (mounted) setState(() => _isSavingUlang = false);
+    }
+  }
+
+  Future<void> _savePlantLog() async {
+    if (_isSavingPlant) return;
+    if (selectedPlantName == null ||
+        plantHeightController.text.trim().isEmpty ||
+        plantConditionController.text.trim().isEmpty ||
+        selectedPlantStage == null) return;
+    setState(() => _isSavingPlant = true);
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+      await FirebaseFirestore.instance.collection('logs').add({
+        'title': selectedPlantName!,
+        'description':
+            'Taas: ${plantHeightController.text.trim()}cm • Yugto: $selectedPlantStage • Kondisyon: ${plantConditionController.text.trim()}',
+        'type': 'plant',
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdBy': uid,
+        'plantName': selectedPlantName,
+        'height': plantHeightController.text.trim(),
+        'condition': plantConditionController.text.trim(),
+        'stage': selectedPlantStage,
+        'observedAt': Timestamp.fromDate(plantDate),
+      });
+      plantHeightController.clear();
+      plantConditionController.clear();
+      setState(() {
+        selectedPlantName = null;
+        selectedPlantStage = null;
+      });
+      _showSuccessSnackbar("Matagumpay na na-save ang tala ng Tanim.");
+    } finally {
+      if (mounted) setState(() => _isSavingPlant = false);
+    }
+  }
+
+  // =======================
   // Logic Helpers
   // =======================
+
   double parseWeight(String weight) {
     return double.tryParse(weight.replaceAll(RegExp(r'[^\d.]'), '')) ?? 0;
   }
 
-  // UPDATED: Groups data into 4 Weekly Buckets to avoid overwhelming users
   List<Map<String, dynamic>> getWeeklyWeightData() {
-    DateTime now = DateTime.now();
-    List<Map<String, dynamic>> data = [];
-
-    // Generates data for the last 4 weeks (1 month trend)
-    for (int i = 3; i >= 0; i--) {
-      // End date of this specific 7-day period
-      DateTime weekEnd = now.subtract(Duration(days: i * 7));
-      // Start date of this specific 7-day period
-      DateTime weekStart = weekEnd.subtract(const Duration(days: 6));
-      
+    final now = DateTime.now();
+    return List.generate(4, (i) {
+      final weekEnd = now.subtract(Duration(days: (3 - i) * 7));
+      final weekStart = weekEnd.subtract(const Duration(days: 6));
       double total = 0;
-
-      for (var log in ulangLogs) {
-        DateTime d = log['date'];
-        // Check if the log's date falls within this week's 7-day chunk
-        if (d.isAfter(weekStart.subtract(const Duration(days: 1))) && 
-            d.isBefore(weekEnd.add(const Duration(days: 1)))) {
-          total += parseWeight(log['weight']);
+      for (final doc in _ulangLogs) {
+        final data = doc.data() as Map<String, dynamic>;
+        final ts = data['observedAt'] as Timestamp?;
+        if (ts == null) continue;
+        final date = ts.toDate();
+        if (date.isAfter(weekStart.subtract(const Duration(days: 1))) &&
+            date.isBefore(weekEnd.add(const Duration(days: 1)))) {
+          total += parseWeight(data['weight'] ?? '0');
         }
       }
-
-      data.add({
-        // Labels the chart with the start date of the week (e.g., 6/19, 6/26)
+      return {
         'label': "${weekStart.month}/${weekStart.day}",
         'total': total,
-      });
-    }
-    return data;
+      };
+    });
   }
 
   Future<void> _selectDate(BuildContext context, bool isUlang) async {
-    final DateTime? picked = await showDatePicker(
+    final picked = await showDatePicker(
       context: context,
       initialDate: isUlang ? selectedDate : plantDate,
       firstDate: DateTime(2023),
       lastDate: DateTime.now(),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: ColorScheme.light(
-              primary: teal,
-              onPrimary: Colors.white,
-              onSurface: textDark,
-            ),
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: ColorScheme.light(
+            primary: teal,
+            onPrimary: Colors.white,
+            onSurface: textDark,
           ),
-          child: child!,
-        );
-      },
+        ),
+        child: child!,
+      ),
     );
     if (picked != null) {
       setState(() {
@@ -145,6 +230,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
   // =======================
   // UI Build
   // =======================
+
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
@@ -155,14 +241,14 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
           backgroundColor: Colors.white,
           elevation: 1,
           shadowColor: Colors.black.withOpacity(0.1),
-          toolbarHeight: 0, 
+          toolbarHeight: 0,
           bottom: TabBar(
             indicatorColor: teal,
             indicatorWeight: 3,
             labelColor: tealDark,
             unselectedLabelColor: textMuted,
             labelStyle: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14),
-            tabs: const <Widget>[
+            tabs: const [
               Tab(text: "Tala ng Ulang"),
               Tab(text: "Tala ng Tanim"),
             ],
@@ -172,12 +258,14 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
           opacity: Tween<double>(begin: 0, end: 1).animate(
             CurvedAnimation(parent: _fadeController, curve: Curves.easeIn),
           ),
-          child: TabBarView(
-            children: [
-              _buildUlangTab(),
-              _buildPlantTab(),
-            ],
-          ),
+          child: _isLoading
+              ? Center(child: CircularProgressIndicator(color: teal))
+              : TabBarView(
+                  children: [
+                    _buildUlangTab(),
+                    _buildPlantTab(),
+                  ],
+                ),
         ),
       ),
     );
@@ -186,6 +274,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
   // =======================
   // Ulang Tab UI
   // =======================
+
   Widget _buildUlangTab() {
     final weeklyData = getWeeklyWeightData();
     final maxWeight = weeklyData.map((e) => e['total'] as double).fold(0.0, max);
@@ -198,7 +287,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
           _buildHeader("Tala ng Ulang", "I-record ang sukat at timbang ng mga ulang."),
           const SizedBox(height: 24),
 
-          _statCard("Kabuuang Tala", ulangLogs.length.toString(), Icons.pets),
+          _statCard("Kabuuang Tala", _ulangLogs.length.toString(), Icons.pets),
           const SizedBox(height: 24),
 
           _buildSectionTitle("Lingguhang Timbang"),
@@ -211,10 +300,10 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
           _buildUlangForm(),
           const SizedBox(height: 24),
 
-          if (ulangLogs.isNotEmpty) ...[
+          if (_ulangLogs.isNotEmpty) ...[
             _buildSectionTitle("Mga Nakaraang Tala"),
             const SizedBox(height: 12),
-            ...ulangLogs.map((log) => _buildUlangLogCard(log)),
+            ..._ulangLogs.map((doc) => _buildUlangLogCard(doc)),
           ],
         ],
       ),
@@ -224,6 +313,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
   // =======================
   // Plant Tab UI
   // =======================
+
   Widget _buildPlantTab() {
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 24, 16, 100),
@@ -233,7 +323,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
           _buildHeader("Tala ng Tanim", "I-record ang paglaki at kondisyon ng mga halaman."),
           const SizedBox(height: 24),
 
-          _statCard("Kabuuang Tala", plantLogs.length.toString(), Icons.eco),
+          _statCard("Kabuuang Tala", _plantLogs.length.toString(), Icons.eco),
           const SizedBox(height: 24),
 
           _buildSectionTitle("Magdagdag ng Tala"),
@@ -241,10 +331,10 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
           _buildPlantForm(),
           const SizedBox(height: 24),
 
-          if (plantLogs.isNotEmpty) ...[
+          if (_plantLogs.isNotEmpty) ...[
             _buildSectionTitle("Mga Nakaraang Tala"),
             const SizedBox(height: 12),
-            ...plantLogs.map((log) => _buildPlantLogCard(log)),
+            ..._plantLogs.map((doc) => _buildPlantLogCard(doc)),
           ],
         ],
       ),
@@ -254,6 +344,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
   // =======================
   // Component Widgets
   // =======================
+
   Widget _buildHeader(String title, String subtitle) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -308,10 +399,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
         children: [
           Container(
             padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: tealLight,
-              borderRadius: BorderRadius.circular(12),
-            ),
+            decoration: BoxDecoration(color: tealLight, borderRadius: BorderRadius.circular(12)),
             child: Icon(icon, color: tealDark, size: 28),
           ),
           const SizedBox(width: 16),
@@ -330,11 +418,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
               const SizedBox(height: 4),
               Text(
                 label,
-                style: GoogleFonts.poppins(
-                  fontSize: 14,
-                  color: textMuted,
-                  fontWeight: FontWeight.w500,
-                ),
+                style: GoogleFonts.poppins(fontSize: 14, color: textMuted, fontWeight: FontWeight.w500),
               ),
             ],
           ),
@@ -343,7 +427,6 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
     );
   }
 
-  // UPDATED: Removed horizontal scroll. Displays a clean, stacked list of weeks.
   Widget _buildChartCard(List<Map<String, dynamic>> weeklyData, double maxWeight) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -354,7 +437,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
       ),
       child: Column(
         children: weeklyData.map((d) {
-          double pct = maxWeight > 0 ? d['total'] / maxWeight : 0;
+          final pct = maxWeight > 0 ? d['total'] / maxWeight : 0.0;
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: Row(
@@ -363,16 +446,12 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
                   width: 50,
                   child: Text(
                     d['label'],
-                    style: GoogleFonts.poppins(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: textMuted,
-                    ),
+                    style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w600, color: textMuted),
                   ),
                 ),
                 Expanded(
                   child: Container(
-                    height: 28, // Slightly taller for easier reading
+                    height: 28,
                     decoration: BoxDecoration(
                       color: const Color(0xFFF3F4F6),
                       borderRadius: BorderRadius.circular(8),
@@ -393,13 +472,9 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
                 SizedBox(
                   width: 60,
                   child: Text(
-                    "${d['total'].toStringAsFixed(1)} g",
+                    "${(d['total'] as double).toStringAsFixed(1)} g",
                     textAlign: TextAlign.right,
-                    style: GoogleFonts.poppins(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: tealDark,
-                    ),
+                    style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w600, color: tealDark),
                   ),
                 ),
               ],
@@ -431,7 +506,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
                 onPressed: () => _selectDate(context, true),
                 icon: Icon(Icons.calendar_month, color: teal, size: 20),
                 label: Text("Palitan", style: GoogleFonts.poppins(color: teal, fontWeight: FontWeight.w600)),
-              )
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -439,20 +514,10 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
           const SizedBox(height: 16),
           _buildInputField(weightController, "Bigat (g)", keyboardType: TextInputType.number),
           const SizedBox(height: 20),
-          _buildSaveButton("I-save ang Ulang Log", () {
-            if (sizeController.text.isNotEmpty && weightController.text.isNotEmpty) {
-              setState(() {
-                ulangLogs.insert(0, {
-                  "size": sizeController.text,
-                  "weight": weightController.text,
-                  "date": selectedDate
-                });
-                sizeController.clear();
-                weightController.clear();
-              });
-              _showSuccessSnackbar("Matagumpay na na-save ang tala ng Ulang.");
-            }
-          }),
+          _buildSaveButton(
+            _isSavingUlang ? "Sine-save..." : "I-save ang Ulang Log",
+            _isSavingUlang ? null : () => _saveUlangLog(),
+          ),
         ],
       ),
     );
@@ -468,7 +533,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
       ),
       child: Column(
         children: [
-           Row(
+          Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
@@ -479,7 +544,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
                 onPressed: () => _selectDate(context, false),
                 icon: Icon(Icons.calendar_month, color: teal, size: 20),
                 label: Text("Palitan", style: GoogleFonts.poppins(color: teal, fontWeight: FontWeight.w600)),
-              )
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -512,59 +577,43 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
             onChanged: (value) => setState(() => selectedPlantStage = value),
           ),
           const SizedBox(height: 20),
-          _buildSaveButton("I-save ang Plant Log", () {
-            if (selectedPlantName != null &&
-                plantHeightController.text.isNotEmpty &&
-                plantConditionController.text.isNotEmpty &&
-                selectedPlantStage != null) {
-              setState(() {
-                plantLogs.insert(0, {
-                  "name": selectedPlantName,
-                  "height": plantHeightController.text,
-                  "condition": plantConditionController.text,
-                  "stage": selectedPlantStage,
-                  "date": plantDate
-                });
-                selectedPlantName = null;
-                selectedPlantStage = null;
-                plantHeightController.clear();
-                plantConditionController.clear();
-              });
-              _showSuccessSnackbar("Matagumpay na na-save ang tala ng Tanim.");
-            }
-          }),
+          _buildSaveButton(
+            _isSavingPlant ? "Sine-save..." : "I-save ang Plant Log",
+            _isSavingPlant ? null : () => _savePlantLog(),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildSaveButton(String text, VoidCallback onPressed) {
+  Widget _buildSaveButton(String text, VoidCallback? onPressed) {
     return SizedBox(
       width: double.infinity,
-      height: 54, 
+      height: 54,
       child: ElevatedButton(
         onPressed: onPressed,
         style: ElevatedButton.styleFrom(
           backgroundColor: teal,
+          disabledBackgroundColor: teal.withOpacity(0.6),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
           elevation: 0,
         ),
         child: Text(
           text,
-          style: GoogleFonts.poppins(
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-            color: Colors.white,
-          ),
+          style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white),
         ),
       ),
     );
   }
 
-  Widget _buildInputField(TextEditingController controller, String label, {TextInputType keyboardType = TextInputType.text}) {
+  Widget _buildInputField(
+    TextEditingController controller,
+    String label, {
+    TextInputType keyboardType = TextInputType.text,
+  }) {
     return TextField(
       controller: controller,
-      keyboardType: keyboardType, 
+      keyboardType: keyboardType,
       style: GoogleFonts.poppins(fontSize: 15, color: textDark),
       decoration: InputDecoration(
         labelText: label,
@@ -583,7 +632,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
         ),
         filled: true,
         fillColor: const Color(0xFFF9FAFB),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18), 
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
       ),
     );
   }
@@ -625,9 +674,15 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
     );
   }
 
-  Widget _buildUlangLogCard(Map<String, dynamic> log) {
-    DateTime d = log['date'];
-    String formattedDate = "${d.month}/${d.day}/${d.year}";
+  Widget _buildUlangLogCard(QueryDocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    final size = data['size'] ?? '—';
+    final weight = data['weight'] ?? '—';
+    final ts = data['observedAt'] as Timestamp?;
+    final date = ts?.toDate();
+    final formattedDate = date != null
+        ? "${date.month}/${date.day}/${date.year}"
+        : '—';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -656,30 +711,19 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      "Laki: ${log['size']} cm",
-                      style: GoogleFonts.poppins(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: textDark,
-                      ),
+                      "Laki: $size cm",
+                      style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600, color: textDark),
                     ),
                     Text(
                       formattedDate,
-                      style: GoogleFonts.poppins(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: teal,
-                      ),
+                      style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w500, color: teal),
                     ),
                   ],
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  "Timbang: ${log['weight']} g",
-                  style: GoogleFonts.poppins(
-                    fontSize: 14,
-                    color: textMuted,
-                  ),
+                  "Timbang: $weight g",
+                  style: GoogleFonts.poppins(fontSize: 14, color: textMuted),
                 ),
               ],
             ),
@@ -689,9 +733,17 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
     );
   }
 
-  Widget _buildPlantLogCard(Map<String, dynamic> log) {
-    DateTime d = log['date'];
-    String formattedDate = "${d.month}/${d.day}/${d.year}";
+  Widget _buildPlantLogCard(QueryDocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    final name = data['plantName'] ?? data['title'] ?? 'Tanim';
+    final height = data['height'] ?? '—';
+    final stage = data['stage'] ?? '-';
+    final condition = data['condition'] ?? '';
+    final ts = data['observedAt'] as Timestamp?;
+    final date = ts?.toDate();
+    final formattedDate = date != null
+        ? "${date.month}/${date.day}/${date.year}"
+        : '—';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -706,7 +758,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: const Color(0xFF10B981).withOpacity(0.1), 
+              color: const Color(0xFF10B981).withOpacity(0.1),
               borderRadius: BorderRadius.circular(10),
             ),
             child: const Icon(Icons.eco, color: Color(0xFF10B981), size: 28),
@@ -717,43 +769,29 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
-                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      log['name'] ?? "Tanim",
-                      style: GoogleFonts.poppins(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: textDark,
-                      ),
+                      name,
+                      style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600, color: textDark),
                     ),
                     Text(
                       formattedDate,
-                      style: GoogleFonts.poppins(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: const Color(0xFF10B981),
-                      ),
+                      style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w500, color: const Color(0xFF10B981)),
                     ),
                   ],
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  "Taas: ${log['height']}cm • Yugto: ${log['stage'] ?? '-'}",
-                  style: GoogleFonts.poppins(
-                    fontSize: 14,
-                    color: textMuted,
-                  ),
+                  "Taas: ${height}cm • Yugto: $stage",
+                  style: GoogleFonts.poppins(fontSize: 14, color: textMuted),
                 ),
-                if (log['condition'] != null && log['condition']!.isNotEmpty)
+                if (condition.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
                     child: Text(
-                      "Kondisyon: ${log['condition']}",
-                      style: GoogleFonts.poppins(
-                        fontSize: 14,
-                        color: textMuted,
-                      ),
+                      "Kondisyon: $condition",
+                      style: GoogleFonts.poppins(fontSize: 14, color: textMuted),
                     ),
                   ),
               ],

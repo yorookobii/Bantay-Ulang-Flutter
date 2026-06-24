@@ -1,7 +1,8 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'dart:ui' as ui;
 import 'package:google_fonts/google_fonts.dart';
-import 'landing_page.dart';
 
 class SignupPage extends StatefulWidget {
   const SignupPage({super.key});
@@ -22,6 +23,7 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
   bool isPasswordVisible = false;
   bool isConfirmPasswordVisible = false;
   bool rememberMe = false;
+  bool _isLoading = false;
   String errorMessage = '';
 
   late AnimationController _fadeController;
@@ -79,62 +81,143 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
     super.dispose();
   }
 
-  void _handleSignIn() {
-    setState(() => errorMessage = '');
+  Future<void> _handleSignIn() async {
+    setState(() {
+      errorMessage = '';
+      _isLoading = true;
+    });
 
     if (emailController.text.trim().isEmpty || passwordController.text.isEmpty) {
-      setState(() => errorMessage = 'Please enter email and password.');
+      setState(() {
+        errorMessage = 'Please enter email and password.';
+        _isLoading = false;
+      });
       return;
     }
 
-    if (!emailController.text.contains('@gmail.com')) {
-      setState(() => errorMessage = 'Please use a valid Email address.');
-      return;
-    }
+    try {
+      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: emailController.text.trim(),
+        password: passwordController.text,
+      );
 
-    if (passwordController.text.length < 8) {
-      setState(() => errorMessage = 'Password must be at least 8 characters.');
-      return;
-    }
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(credential.user!.uid)
+          .get();
 
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const DashboardPage()),
-    );
+      if (!mounted) return;
+
+      final role = doc.data()?['role'] ?? 'user';
+
+      if (role == 'admin') {
+        Navigator.pushReplacementNamed(context, '/admin');
+      } else {
+        Navigator.pushReplacementNamed(context, '/dashboard');
+      }
+    } on FirebaseAuthException catch (e) {
+      setState(() {
+        errorMessage = _authErrorMessage(e.code);
+        _isLoading = false;
+      });
+    } catch (_) {
+      setState(() {
+        errorMessage = 'An error occurred. Please try again.';
+        _isLoading = false;
+      });
+    }
   }
 
-  void _handleSignUp() {
-    setState(() => errorMessage = '');
+  Future<void> _handleSignUp() async {
+    setState(() {
+      errorMessage = '';
+      _isLoading = true;
+    });
 
     if (nameController.text.trim().isEmpty ||
         emailController.text.trim().isEmpty ||
         passwordController.text.isEmpty ||
         confirmPasswordController.text.isEmpty) {
-      setState(() => errorMessage = 'Please fill in all fields.');
-      return;
-    }
-
-    if (!emailController.text.contains('@gmail.com')) {
-      setState(() => errorMessage = 'Please use a valid Email address.');
+      setState(() {
+        errorMessage = 'Please fill in all fields.';
+        _isLoading = false;
+      });
       return;
     }
 
     if (passwordController.text.length < 8) {
-      setState(() => errorMessage = 'Password must be at least 8 characters.');
+      setState(() {
+        errorMessage = 'Password must be at least 8 characters.';
+        _isLoading = false;
+      });
       return;
     }
 
     if (passwordController.text != confirmPasswordController.text) {
-      setState(() => errorMessage = 'Passwords do not match.');
+      setState(() {
+        errorMessage = 'Passwords do not match.';
+        _isLoading = false;
+      });
       return;
     }
 
-    // Switch to sign-in page after successful sign-up
-    setState(() {
-      isSignIn = true;
+    try {
+      final credential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+        email: emailController.text.trim(),
+        password: passwordController.text,
+      );
+
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(credential.user!.uid)
+          .set({
+        'email': emailController.text.trim(),
+        'fullName': nameController.text.trim(),
+        'role': 'user',
+        'status': 'active',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      if (!mounted) return;
+
+      setState(() {
+        isSignIn = true;
+        _isLoading = false;
+        errorMessage = 'Account created! Please sign in.';
+      });
       _clearForm();
-      errorMessage = 'Account created successfully! Please sign in.';
-    });
+    } on FirebaseAuthException catch (e) {
+      setState(() {
+        errorMessage = _authErrorMessage(e.code);
+        _isLoading = false;
+      });
+    } catch (_) {
+      setState(() {
+        errorMessage = 'An error occurred. Please try again.';
+        _isLoading = false;
+      });
+    }
+  }
+
+  String _authErrorMessage(String code) {
+    switch (code) {
+      case 'user-not-found':
+      case 'wrong-password':
+      case 'invalid-credential':
+        return 'Invalid email or password.';
+      case 'email-already-in-use':
+        return 'This email is already registered.';
+      case 'weak-password':
+        return 'Password is too weak.';
+      case 'invalid-email':
+        return 'Please enter a valid email address.';
+      case 'too-many-requests':
+        return 'Too many attempts. Please try again later.';
+      case 'network-request-failed':
+        return 'Network error. Check your connection.';
+      default:
+        return 'An error occurred. Please try again.';
+    }
   }
 
   void _clearForm() {
@@ -677,20 +760,26 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: isSignIn ? _handleSignIn : _handleSignUp,
+          onTap: _isLoading ? null : (isSignIn ? _handleSignIn : _handleSignUp),
           borderRadius: BorderRadius.circular(14),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
             child: Center(
-              child: Text(
-                isSignIn ? 'Log In' : 'Sign Up',
-                style: GoogleFonts.poppins(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                  letterSpacing: 0.5,
-                ),
-              ),
+              child: _isLoading
+                  ? const SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
+                    )
+                  : Text(
+                      isSignIn ? 'Log In' : 'Sign Up',
+                      style: GoogleFonts.poppins(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
             ),
           ),
         ),

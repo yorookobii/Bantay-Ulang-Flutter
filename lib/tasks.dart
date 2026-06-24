@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'logs.dart'; // Kept for your Task Card onTap navigation
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'logs.dart';
 
 class TasksPage extends StatefulWidget {
   const TasksPage({super.key});
@@ -10,156 +13,282 @@ class TasksPage extends StatefulWidget {
 }
 
 class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMixin {
-  // Unified High-Contrast Aquatic Palette
   final Color tealLight = const Color(0xFFE6FFF9);
   final Color teal = const Color(0xFF0D9488);
   final Color tealDark = const Color(0xFF0F766E);
   final Color seaBlue = const Color(0xFF0369A1);
-  final Color warningRed = const Color(0xFFDC2626);
   final Color warningOrange = const Color(0xFFF59E0B);
   final Color textDark = const Color(0xFF1F2937);
   final Color textMuted = const Color(0xFF6B7280);
 
   late AnimationController _fadeController;
+  StreamSubscription<QuerySnapshot>? _tasksSub;
 
-  List<Map<String, dynamic>> tasks = [
-    {
-      "title": "Ulang Data Capture",
-      "due": "Mar 06, 2026",
-      "assignedBy": "Admin",
-      "notes": "Kunin ang sukat at timbang ng ulang sa lahat ng tangke.",
-      "status": "in-progress",
-    },
-  ];
+  List<QueryDocumentSnapshot> _tasks = [];
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    // Quick, snappy fade transition instead of continuous loops
     _fadeController = AnimationController(
       duration: const Duration(milliseconds: 600),
       vsync: this,
     )..forward();
+    _subscribeTasks();
+  }
+
+  void _subscribeTasks() {
+    _tasksSub = FirebaseFirestore.instance
+        .collection('tasks')
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .listen(
+      (snapshot) {
+        if (!mounted) return;
+        setState(() {
+          _isLoading = false;
+          _tasks = snapshot.docs;
+        });
+      },
+      onError: (_) {
+        if (mounted) setState(() => _isLoading = false);
+      },
+    );
   }
 
   @override
   void dispose() {
+    _tasksSub?.cancel();
     _fadeController.dispose();
     super.dispose();
   }
 
-  void markAsCompleted(int index) {
-    setState(() {
-      tasks[index]["status"] = "done";
-    });
+  Future<void> _markAsCompleted(String docId) async {
+    await FirebaseFirestore.instance
+        .collection('tasks')
+        .doc(docId)
+        .update({'status': 'done'});
   }
 
-  Color statusColor(String status) {
+  Future<void> _showAddTaskDialog() async {
+    final titleCtrl = TextEditingController();
+    final descCtrl = TextEditingController();
+    bool saving = false;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text(
+            "Bagong Gawain",
+            style: GoogleFonts.poppins(fontWeight: FontWeight.w700, color: textDark),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleCtrl,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: InputDecoration(
+                  labelText: 'Pamagat *',
+                  labelStyle: GoogleFonts.poppins(fontSize: 14),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide(color: teal, width: 2),
+                  ),
+                ),
+                style: GoogleFonts.poppins(fontSize: 14),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: descCtrl,
+                textCapitalization: TextCapitalization.sentences,
+                maxLines: 3,
+                decoration: InputDecoration(
+                  labelText: 'Paglalarawan',
+                  labelStyle: GoogleFonts.poppins(fontSize: 14),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: BorderSide(color: teal, width: 2),
+                  ),
+                ),
+                style: GoogleFonts.poppins(fontSize: 14),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.pop(ctx),
+              child: Text(
+                "Ikansela",
+                style: GoogleFonts.poppins(color: textMuted, fontWeight: FontWeight.w600),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      if (titleCtrl.text.trim().isEmpty) return;
+                      setDialogState(() => saving = true);
+                      final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+                      await FirebaseFirestore.instance.collection('tasks').add({
+                        'title': titleCtrl.text.trim(),
+                        'description': descCtrl.text.trim(),
+                        'status': 'pending',
+                        'createdAt': FieldValue.serverTimestamp(),
+                        'assignedTo': uid,
+                      });
+                      if (ctx.mounted) Navigator.pop(ctx);
+                    },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: teal,
+                elevation: 0,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              child: saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                    )
+                  : Text(
+                      "I-save",
+                      style: GoogleFonts.poppins(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    titleCtrl.dispose();
+    descCtrl.dispose();
+  }
+
+  Color _statusColor(String status) {
     switch (status) {
-      case "pending":
+      case 'pending':
         return warningOrange;
-      case "in-progress":
-        return seaBlue;
-      case "done":
+      case 'done':
         return teal;
       default:
         return textMuted;
     }
   }
 
-  Color statusBackground(String status) {
+  Color _statusBg(String status) {
     switch (status) {
-      case "pending":
+      case 'pending':
         return warningOrange.withOpacity(0.15);
-      case "in-progress":
-        return seaBlue.withOpacity(0.15);
-      case "done":
+      case 'done':
         return teal.withOpacity(0.15);
       default:
         return Colors.grey.shade200;
     }
   }
 
-  String statusLabel(String status) {
+  String _statusLabel(String status) {
     switch (status) {
-      case "pending":
+      case 'pending':
         return "Gagawin (Pending)";
-      case "in-progress":
-        return "Ginagawa (In Progress)";
-      case "done":
+      case 'done':
         return "Tapos Na (Completed)";
       default:
         return status;
     }
   }
 
+  String _fmtTimestamp(Timestamp? ts) {
+    if (ts == null) return '—';
+    final d = ts.toDate();
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${months[d.month - 1]} ${d.day}, ${d.year}';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF3F4F6), // Light gray background for contrast
-      // REMOVED: appBar and drawer to prevent duplication inside the Dashboard shell
-      
+      backgroundColor: const Color(0xFFF3F4F6),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _showAddTaskDialog,
+        backgroundColor: tealDark,
+        icon: const Icon(Icons.add, color: Colors.white),
+        label: Text(
+          "Bagong Gawain",
+          style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600),
+        ),
+      ),
       body: FadeTransition(
         opacity: Tween<double>(begin: 0, end: 1).animate(
           CurvedAnimation(parent: _fadeController, curve: Curves.easeIn),
         ),
-        child: SingleChildScrollView(
-          // ADDED: 100px bottom padding so content scrolls above the bottom nav bar
-          padding: const EdgeInsets.fromLTRB(16, 24, 16, 100),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                "Mga Gawain (Tasks)",
-                style: GoogleFonts.poppins(
-                  fontSize: 28,
-                  fontWeight: FontWeight.w700,
-                  color: textDark,
-                  letterSpacing: -0.5,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                "Mga nakatalagang gawain na kailangan mong tapusin.",
-                style: GoogleFonts.poppins(
-                  fontSize: 15,
-                  color: textMuted,
-                  fontWeight: FontWeight.w400,
-                ),
-              ),
-              const SizedBox(height: 24),
-              
-              Text(
-                "Kasalukuyang Listahan",
-                style: GoogleFonts.poppins(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: textDark,
-                  letterSpacing: 0.3,
-                ),
-              ),
-              const SizedBox(height: 12),
-              
-              tasks.isEmpty
-                  ? _buildEmptyState()
-                  : Column(
-                      children: List.generate(
-                        tasks.length,
-                        (index) => Padding(
-                          padding: const EdgeInsets.only(bottom: 12.0),
-                          child: _buildTaskCard(tasks[index], index),
-                        ),
+        child: _isLoading
+            ? Center(child: CircularProgressIndicator(color: teal))
+            : SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 24, 16, 120),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      "Mga Gawain (Tasks)",
+                      style: GoogleFonts.poppins(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w700,
+                        color: textDark,
+                        letterSpacing: -0.5,
                       ),
                     ),
-            ],
-          ),
-        ),
+                    const SizedBox(height: 6),
+                    Text(
+                      "Mga nakatalagang gawain na kailangan mong tapusin.",
+                      style: GoogleFonts.poppins(
+                        fontSize: 15,
+                        color: textMuted,
+                        fontWeight: FontWeight.w400,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Text(
+                      "Kasalukuyang Listahan",
+                      style: GoogleFonts.poppins(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: textDark,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _tasks.isEmpty
+                        ? _buildEmptyState()
+                        : Column(
+                            children: _tasks.map((doc) => Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: _buildTaskCard(doc),
+                            )).toList(),
+                          ),
+                  ],
+                ),
+              ),
       ),
     );
   }
 
-  Widget _buildTaskCard(Map<String, dynamic> task, int index) {
-    final bool isDone = task["status"] == "done";
+  Widget _buildTaskCard(QueryDocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    final String docId = doc.id;
+    final String title = data['title'] ?? '';
+    final String description = data['description'] ?? '';
+    final String status = data['status'] ?? 'pending';
+    final Timestamp? createdAt = data['createdAt'] as Timestamp?;
+    final bool isDone = status == 'done';
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -177,21 +306,16 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(16),
         child: InkWell(
-          onTap: () {
-            // Note: This pushes a new LogsPage on top. If you want it to switch tabs 
-            // instead, you will need to pass a callback from DashboardPage.
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => const LogsPage()),
-            );
-          },
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const LogsPage()),
+          ),
           borderRadius: BorderRadius.circular(16),
           child: Padding(
             padding: const EdgeInsets.all(20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Header with Icon and Title
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -214,51 +338,41 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            task["title"],
+                            title,
                             style: GoogleFonts.poppins(
                               fontSize: 16,
                               fontWeight: FontWeight.w700,
                               color: textDark,
                             ),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            task["notes"],
-                            style: GoogleFonts.poppins(
-                              fontSize: 14,
-                              color: textMuted,
-                              height: 1.4,
+                          if (description.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              description,
+                              style: GoogleFonts.poppins(
+                                fontSize: 14,
+                                color: textMuted,
+                                height: 1.4,
+                              ),
                             ),
-                          ),
+                          ],
                         ],
                       ),
                     ),
                   ],
                 ),
-                
+
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 16),
                   child: Divider(height: 1, thickness: 1, color: Color(0xFFF3F4F6)),
                 ),
 
-                // Task Details (Due Date & Assignee)
                 Row(
                   children: [
                     Icon(Icons.calendar_today, size: 16, color: textMuted),
                     const SizedBox(width: 6),
                     Text(
-                      "Due: ${task["due"]}",
-                      style: GoogleFonts.poppins(
-                        fontSize: 13,
-                        color: textMuted,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Icon(Icons.person, size: 16, color: textMuted),
-                    const SizedBox(width: 6),
-                    Text(
-                      "By: ${task["assignedBy"]}",
+                      "Nai-log: ${_fmtTimestamp(createdAt)}",
                       style: GoogleFonts.poppins(
                         fontSize: 13,
                         color: textMuted,
@@ -269,20 +383,19 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
                 ),
                 const SizedBox(height: 16),
 
-                // Footer with Status Badge and Action Button
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
-                        color: statusBackground(task["status"]),
+                        color: _statusBg(status),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
-                        statusLabel(task["status"]),
+                        _statusLabel(status),
                         style: GoogleFonts.poppins(
-                          color: statusColor(task["status"]),
+                          color: _statusColor(status),
                           fontWeight: FontWeight.w700,
                           fontSize: 12,
                         ),
@@ -305,7 +418,7 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
                       )
                     else
                       ElevatedButton.icon(
-                        onPressed: () => markAsCompleted(index),
+                        onPressed: () => _markAsCompleted(docId),
                         icon: const Icon(Icons.check, size: 18, color: Colors.white),
                         label: Text(
                           "Tapusin",
@@ -348,10 +461,7 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
         children: [
           Container(
             padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: tealLight,
-              shape: BoxShape.circle,
-            ),
+            decoration: BoxDecoration(color: tealLight, shape: BoxShape.circle),
             child: Icon(Icons.task_alt, size: 48, color: tealDark),
           ),
           const SizedBox(height: 24),

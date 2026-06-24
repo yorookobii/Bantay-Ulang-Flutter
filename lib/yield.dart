@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class YieldEstimationPage extends StatefulWidget {
   const YieldEstimationPage({super.key});
@@ -19,13 +21,24 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
   final Color successGreen = const Color(0xFF10B981);
 
   late AnimationController _fadeController;
-  
+  StreamSubscription<QuerySnapshot>? _growthSub;
+
+  bool _isLoading = true;
   bool _isRecalculating = false;
 
-  // Dummy Data for Logic Transparency
-  final double estimatedYieldKg = 55.0;
+  // Firestore-backed fields
+  double _expectedYield = 0;
+  double _avgWeightPerPiece = 0;
+  DateTime? _cycleStart;
+  DateTime? _cycleEnd;
+  DateTime? _targetHarvestDate;
+  double _survivalRate = 0;
+  String _summaryNote = '';
+
+  // Local market price (not from Firebase)
   final double marketPricePerKg = 500.0;
-  double get estimatedRevenue => estimatedYieldKg * marketPricePerKg;
+
+  double get estimatedRevenue => _expectedYield * marketPricePerKg;
 
   @override
   void initState() {
@@ -34,27 +47,47 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
       duration: const Duration(milliseconds: 600),
       vsync: this,
     )..forward();
+    _subscribeGrowthIndicators();
+  }
+
+  void _subscribeGrowthIndicators() {
+    _growthSub = FirebaseFirestore.instance
+        .collection('growth_indicators')
+        .orderBy('timestamp', descending: true)
+        .limit(1)
+        .snapshots()
+        .listen((snapshot) {
+      if (!mounted) return;
+      if (snapshot.docs.isEmpty) {
+        setState(() => _isLoading = false);
+        return;
+      }
+      final data = snapshot.docs.first.data() as Map<String, dynamic>;
+      setState(() {
+        _isLoading = false;
+        _expectedYield = (data['expectedYield'] as num?)?.toDouble() ?? 0;
+        _avgWeightPerPiece = (data['avgWeightPerPiece'] as num?)?.toDouble() ?? 0;
+        _cycleStart = (data['cycleStart'] as Timestamp?)?.toDate();
+        _cycleEnd = (data['cycleEnd'] as Timestamp?)?.toDate();
+        _targetHarvestDate = (data['targetHarvestDate'] as Timestamp?)?.toDate();
+        _survivalRate = (data['survivalRate'] as num?)?.toDouble() ?? 0;
+        _summaryNote = (data['summaryNote'] as String?) ?? '';
+      });
+    });
   }
 
   @override
   void dispose() {
+    _growthSub?.cancel();
     _fadeController.dispose();
     super.dispose();
   }
 
-  // Simulated refresh function
   Future<void> _recalculateYield() async {
-    setState(() {
-      _isRecalculating = true;
-    });
-
-    await Future.delayed(const Duration(seconds: 2));
-    
+    setState(() => _isRecalculating = true);
+    await Future.delayed(const Duration(milliseconds: 500));
     if (mounted) {
-      setState(() {
-        _isRecalculating = false;
-      });
-
+      setState(() => _isRecalculating = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Row(
@@ -72,104 +105,121 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
     }
   }
 
+  String _fmtDate(DateTime? d) {
+    if (d == null) return '—';
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${months[d.month - 1]} ${d.day}, ${d.year}';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF3F4F6),
-      // REMOVED: appBar and drawer to prevent duplication inside the Dashboard shell
-      
       body: FadeTransition(
         opacity: Tween<double>(begin: 0, end: 1).animate(
           CurvedAnimation(parent: _fadeController, curve: Curves.easeIn),
         ),
-        child: RefreshIndicator(
-          onRefresh: _recalculateYield,
-          color: teal,
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            // ADDED: 100px bottom padding so content scrolls above the bottom nav bar
-            padding: const EdgeInsets.fromLTRB(16, 24, 16, 100),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+        child: _isLoading
+            ? Center(child: CircularProgressIndicator(color: teal))
+            : RefreshIndicator(
+                onRefresh: _recalculateYield,
+                color: teal,
+                child: SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(16, 24, 16, 100),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text(
-                            "Inaasahang Ani at Kita",
-                            style: GoogleFonts.poppins(
-                              fontSize: 26,
-                              fontWeight: FontWeight.w700,
-                              color: textDark,
-                              letterSpacing: -0.5,
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  "Inaasahang Ani at Kita",
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 26,
+                                    fontWeight: FontWeight.w700,
+                                    color: textDark,
+                                    letterSpacing: -0.5,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  "Pagtatantiya ng ani at kikitain base sa iyong mga tala at presyo sa merkado.",
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 14,
+                                    color: textMuted,
+                                    fontWeight: FontWeight.w400,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                          const SizedBox(height: 6),
-                          Text(
-                            "Pagtatantiya ng ani at kikitain base sa iyong mga tala at presyo sa merkado.",
-                            style: GoogleFonts.poppins(
-                              fontSize: 14,
-                              color: textMuted,
-                              fontWeight: FontWeight.w400,
-                            ),
+                          IconButton(
+                            onPressed: _isRecalculating ? null : _recalculateYield,
+                            icon: _isRecalculating
+                                ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: teal, strokeWidth: 2))
+                                : Icon(Icons.refresh, color: tealDark, size: 28),
+                            tooltip: 'I-update ang data',
                           ),
                         ],
                       ),
-                    ),
-                    IconButton(
-                      onPressed: _isRecalculating ? null : _recalculateYield,
-                      icon: _isRecalculating 
-                          ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: teal, strokeWidth: 2))
-                          : Icon(Icons.refresh, color: tealDark, size: 28),
-                      tooltip: 'I-update ang data',
-                    ),
-                  ],
+                      const SizedBox(height: 24),
+
+                      // Main Yield & Revenue Highlight
+                      _buildMainYieldAndRevenueCard(),
+                      const SizedBox(height: 20),
+
+                      // Progress Card
+                      _buildSectionTitle(Icons.timelapse, "Siklo ng Paglaki (Cycle)"),
+                      const SizedBox(height: 12),
+                      _buildCycleProgressCard(),
+                      const SizedBox(height: 24),
+
+                      // Calculation Factors
+                      _buildSectionTitle(Icons.calculate, "Mga Salik ng Pagtatantiya"),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          _buildFactorCard(
+                            "Avg. Timbang",
+                            _avgWeightPerPiece > 0
+                                ? "${_avgWeightPerPiece.toStringAsFixed(0)}g"
+                                : "—",
+                            Icons.scale,
+                          ),
+                          const SizedBox(width: 12),
+                          _buildFactorCard(
+                            "Buhay (Survival)",
+                            _survivalRate > 0
+                                ? "${_survivalRate.toStringAsFixed(0)}%"
+                                : "—",
+                            Icons.health_and_safety,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+
+                      // Market Price Factor taking full width for emphasis
+                      _buildFactorCard(
+                        "Kasalukuyang Presyo sa Merkado",
+                        "₱${marketPricePerKg.toStringAsFixed(0)} / kg",
+                        Icons.storefront,
+                        isFullWidth: true,
+                      ),
+                      const SizedBox(height: 24),
+
+                      // Recommendation Section
+                      _buildSectionTitle(Icons.lightbulb, "Status at Rekomendasyon"),
+                      const SizedBox(height: 12),
+                      _buildRecommendationCard(),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 24),
-
-                // Main Yield & Revenue Highlight
-                _buildMainYieldAndRevenueCard(),
-                const SizedBox(height: 20),
-
-                // Progress Card
-                _buildSectionTitle(Icons.timelapse, "Siklo ng Paglaki (Cycle)"),
-                const SizedBox(height: 12),
-                _buildCycleProgressCard(),
-                const SizedBox(height: 24),
-
-                // Calculation Factors (Transparency for the user)
-                _buildSectionTitle(Icons.calculate, "Mga Salik ng Pagtatantiya"),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    _buildFactorCard("Avg. Timbang", "~50g", Icons.scale),
-                    const SizedBox(width: 12),
-                    _buildFactorCard("Buhay (Survival)", "85%", Icons.health_and_safety),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                
-                // Market Price Factor taking full width for emphasis
-                _buildFactorCard(
-                  "Kasalukuyang Presyo sa Merkado", 
-                  "₱${marketPricePerKg.toStringAsFixed(0)} / kg", 
-                  Icons.storefront,
-                  isFullWidth: true,
-                ),
-                const SizedBox(height: 24),
-
-                // Recommendation Section
-                _buildSectionTitle(Icons.lightbulb, "Status at Rekomendasyon"),
-                const SizedBox(height: 12),
-                _buildRecommendationCard(),
-              ],
-            ),
-          ),
-        ),
+              ),
       ),
     );
   }
@@ -251,7 +301,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  "${estimatedYieldKg.toStringAsFixed(0)} kg",
+                  _expectedYield > 0 ? "${_expectedYield.toStringAsFixed(0)} kg" : "— kg",
                   style: GoogleFonts.poppins(
                     fontSize: 42,
                     fontWeight: FontWeight.w800,
@@ -262,7 +312,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  "Target Harvest: Mar 15 – 20, 2026",
+                  "Target Harvest: ${_fmtDate(_targetHarvestDate)}",
                   style: GoogleFonts.poppins(
                     fontSize: 13,
                     color: Colors.white.withOpacity(0.85),
@@ -272,13 +322,13 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
               ],
             ),
           ),
-          
+
           // Divider
           Container(
             height: 1,
             color: Colors.white.withOpacity(0.2),
           ),
-          
+
           // Revenue Section
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
@@ -332,9 +382,13 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
   }
 
   Widget _buildCycleProgressCard() {
-    const int totalDays = 120;
-    const int currentDay = 65;
-    const double progress = currentDay / totalDays;
+    final int totalDays = (_cycleStart != null && _cycleEnd != null)
+        ? _cycleEnd!.difference(_cycleStart!).inDays.clamp(1, 9999)
+        : 120;
+    final int currentDay = _cycleStart != null
+        ? DateTime.now().difference(_cycleStart!).inDays.clamp(0, totalDays)
+        : 0;
+    final double progress = currentDay / totalDays;
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -385,19 +439,24 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
             ),
           ),
           const SizedBox(height: 12),
-          Text(
-            "Ang mga ulang ay kasalukuyang nasa yugto ng mabilisang paglaki.",
-            style: GoogleFonts.poppins(
-              fontSize: 13,
-              color: textMuted,
-            ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                _fmtDate(_cycleStart),
+                style: GoogleFonts.poppins(fontSize: 12, color: textMuted),
+              ),
+              Text(
+                _fmtDate(_cycleEnd),
+                style: GoogleFonts.poppins(fontSize: 12, color: textMuted),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  // Updated Factor Card to support full width
   Widget _buildFactorCard(String label, String value, IconData icon, {bool isFullWidth = false}) {
     Widget cardContent = Container(
       padding: const EdgeInsets.all(16),
@@ -459,6 +518,10 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
   }
 
   Widget _buildRecommendationCard() {
+    final note = _summaryNote.isNotEmpty
+        ? _summaryNote
+        : "Normal ang takbo ng paglaki. Panatilihin ang regular na pagpapakain upang maabot o mahigitan pa ang ₱${estimatedRevenue.toStringAsFixed(0)} na potensyal na kita.";
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -492,7 +555,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  "Normal ang takbo ng paglaki. Panatilihin ang regular na pagpapakain upang maabot o mahigitan pa ang ₱27,500 na potensyal na kita.",
+                  note,
                   style: GoogleFonts.poppins(
                     fontSize: 13,
                     color: textDark.withOpacity(0.8),

@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'dart:io';
 import 'package:google_fonts/google_fonts.dart';
@@ -23,23 +25,82 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
 
   late GlobalKey<ScaffoldState> _scaffoldKey;
   late AnimationController _fadeController;
-  
+
   File? _profileImage;
   late TextEditingController _addressController;
   bool _isEditingAddress = false;
+
+  String _fullName = '';
+  String _email = '';
+  String _role = '';
+  bool _isLoading = true;
+  bool _isSaving = false;
+
+  String get _initials {
+    final parts = _fullName.trim().split(' ');
+    if (parts.isEmpty || _fullName.isEmpty) return '?';
+    if (parts.length == 1) return parts[0][0].toUpperCase();
+    return '${parts[0][0]}${parts[parts.length - 1][0]}'.toUpperCase();
+  }
 
   @override
   void initState() {
     super.initState();
     _scaffoldKey = GlobalKey<ScaffoldState>();
-    _addressController = TextEditingController(
-      text: "123 Riverside Street, Malolos, Bulacan",
-    );
-    
+    _addressController = TextEditingController();
     _fadeController = AnimationController(
       duration: const Duration(milliseconds: 1000),
       vsync: this,
     )..forward();
+    _loadUserData();
+  }
+
+  Future<void> _loadUserData() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .get();
+
+    if (!mounted) return;
+
+    final data = doc.data() ?? {};
+    setState(() {
+      _fullName = data['fullName'] ?? '';
+      _email = user.email ?? '';
+      _role = data['role'] ?? 'user';
+      _addressController.text = data['address'] ?? '';
+      _isLoading = false;
+    });
+  }
+
+  Future<void> _updateProfile() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    setState(() => _isSaving = true);
+
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .update({'address': _addressController.text.trim()});
+
+    if (!mounted) return;
+
+    setState(() {
+      _isSaving = false;
+      _isEditingAddress = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Profile updated.', style: GoogleFonts.poppins()),
+        backgroundColor: teal,
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   @override
@@ -56,7 +117,9 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
       backgroundColor: Colors.white,
       drawer: _buildSidebar(context),
       appBar: _buildTopBar(context),
-      body: FadeTransition(
+      body: _isLoading
+          ? Center(child: CircularProgressIndicator(color: teal))
+          : FadeTransition(
         opacity: Tween<double>(begin: 0, end: 1).animate(
           CurvedAnimation(parent: _fadeController, curve: Curves.easeInOut),
         ),
@@ -101,7 +164,7 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
                           )
                         : Center(
                             child: Text(
-                              "JD",
+                              _initials,
                               style: GoogleFonts.poppins(
                                 fontSize: 48,
                                 fontWeight: FontWeight.w700,
@@ -160,11 +223,11 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildInfoField("Full Name", "Juan Dela Cruz"),
+                    _buildInfoField("Full Name", _fullName),
                     const SizedBox(height: 16),
-                    _buildInfoField("Plant Chosen", "Mint"),
+                    _buildInfoField("Role", _role),
                     const SizedBox(height: 16),
-                    _buildInfoField("Email Address", "juan.delacruz@email.com"),
+                    _buildInfoField("Email Address", _email),
                     const SizedBox(height: 16),
                     _buildAddressField(),
                   ],
@@ -176,21 +239,7 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
               Material(
                 color: Colors.transparent,
                 child: InkWell(
-                  onTap: () {
-                    setState(() {
-                      _isEditingAddress = false;
-                    });
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          'Update Account Information',
-                          style: GoogleFonts.poppins(),
-                        ),
-                        backgroundColor: teal,
-                        duration: const Duration(seconds: 2),
-                      ),
-                    );
-                  },
+                  onTap: _isSaving ? null : _updateProfile,
                   borderRadius: BorderRadius.circular(12),
                   child: Container(
                     width: double.infinity,
@@ -211,15 +260,24 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
                       ],
                     ),
                     child: Center(
-                      child: Text(
-                        "Update Account Information",
-                        style: GoogleFonts.poppins(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                          letterSpacing: 0.5,
-                        ),
-                      ),
+                      child: _isSaving
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 2.5,
+                              ),
+                            )
+                          : Text(
+                              "Update Account Information",
+                              style: GoogleFonts.poppins(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
                     ),
                   ),
                 ),
@@ -307,7 +365,6 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
   }
 
   void _pickImage() {
-    // Simulated image picker - in production, use image_picker package
     showDialog(
       context: context,
       builder: (BuildContext context) => AlertDialog(
@@ -333,8 +390,6 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              // For demo purposes, create a simple colored square as placeholder image
-              // In production, you would use: image_picker package
               setState(() {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
@@ -603,6 +658,7 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
         onTap: () {
           Navigator.pop(context);
           if (isLogout) {
+            FirebaseAuth.instance.signOut();
             Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
           } else if (page != null) {
             Navigator.pushReplacement(
@@ -653,4 +709,3 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
     );
   }
 }
-

@@ -1,5 +1,7 @@
+import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart'; // Added for ScrollDirection
+import 'package:flutter/rendering.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'tasks.dart';
 import 'yield.dart';
@@ -15,7 +17,6 @@ class DashboardPage extends StatefulWidget {
 
 class _DashboardPageState extends State<DashboardPage>
     with SingleTickerProviderStateMixin {
-  // Aquatic Color Palette
   final Color tealLight = const Color(0xFFE6FFF9);
   final Color teal = const Color(0xFF0D9488);
   final Color tealDark = const Color(0xFF0F766E);
@@ -26,8 +27,29 @@ class _DashboardPageState extends State<DashboardPage>
 
   int _currentNavIndex = 0;
   bool _showNotificationDropdown = false;
-  bool _isNavBarVisible = true; // State for nav bar visibility
+  bool _isNavBarVisible = true;
   late AnimationController _fadeController;
+
+  // Live data from sensor_readings
+  double? _waterTemp;
+  double? _phLevel;
+  double? _dissolvedOxygen;
+  double? _salinity;
+  double? _turbidity;
+  double? _waterLevel;
+
+  // Live data from growth_indicators
+  double? _expectedYield;
+  String _shrimpHealth = 'Malusog';
+  String _plantHealth = 'Maayos';
+
+  // Live data from alerts
+  List<Map<String, dynamic>> _activeAlerts = [];
+
+  // Firestore subscriptions
+  StreamSubscription<QuerySnapshot>? _sensorSub;
+  StreamSubscription<QuerySnapshot>? _growthSub;
+  StreamSubscription<QuerySnapshot>? _alertsSub;
 
   @override
   void initState() {
@@ -36,20 +58,157 @@ class _DashboardPageState extends State<DashboardPage>
       duration: const Duration(milliseconds: 600),
       vsync: this,
     )..forward();
+    _subscribeSensorReadings();
+    _subscribeGrowthIndicators();
+    _subscribeAlerts();
+  }
+
+  void _subscribeSensorReadings() {
+    _sensorSub = FirebaseFirestore.instance
+        .collection('sensor_readings')
+        .orderBy('timestamp', descending: true)
+        .limit(1)
+        .snapshots()
+        .listen((snapshot) {
+      if (snapshot.docs.isEmpty) return;
+      final data = snapshot.docs.first.data() as Map<String, dynamic>;
+      setState(() {
+        _waterTemp = (data['waterTemp'] as num?)?.toDouble();
+        _phLevel = (data['phLevel'] as num?)?.toDouble();
+        _dissolvedOxygen = (data['dissolvedOxygen'] as num?)?.toDouble();
+        _salinity = (data['salinity'] as num?)?.toDouble();
+        _turbidity = (data['turbidity'] as num?)?.toDouble();
+        _waterLevel = (data['waterLevel'] as num?)?.toDouble();
+      });
+    });
+  }
+
+  void _subscribeGrowthIndicators() {
+    _growthSub = FirebaseFirestore.instance
+        .collection('growth_indicators')
+        .orderBy('timestamp', descending: true)
+        .limit(1)
+        .snapshots()
+        .listen((snapshot) {
+      if (snapshot.docs.isEmpty) return;
+      final data = snapshot.docs.first.data() as Map<String, dynamic>;
+      setState(() {
+        _expectedYield = (data['expectedYield'] as num?)?.toDouble();
+        _shrimpHealth = (data['shrimpHealth'] as String?) ?? 'Malusog';
+        _plantHealth = (data['plantHealth'] as String?) ?? 'Maayos';
+      });
+    });
+  }
+
+  void _subscribeAlerts() {
+    _alertsSub = FirebaseFirestore.instance
+        .collection('alerts')
+        .where('status', isEqualTo: 'active')
+        .snapshots()
+        .listen((snapshot) {
+      setState(() {
+        _activeAlerts = snapshot.docs.map((doc) {
+          return {'id': doc.id, ...doc.data() as Map<String, dynamic>};
+        }).toList();
+      });
+    });
   }
 
   @override
   void dispose() {
     _fadeController.dispose();
+    _sensorSub?.cancel();
+    _growthSub?.cancel();
+    _alertsSub?.cancel();
     super.dispose();
   }
+
+  // ── Derived status from sensor values ─────────────────────────────────
+
+  String get _tempStatus {
+    if (_waterTemp == null) return 'WALANG DATA';
+    if (_waterTemp! < 24) return 'MABABA';
+    if (_waterTemp! > 30) return 'MATAAS';
+    return 'KATAMTAMAN';
+  }
+
+  String get _tempDescription {
+    if (_waterTemp == null) return 'Walang datos mula sa sensor.';
+    if (_waterTemp! < 24) return 'Mababa ang temperatura. Maaaring makaapekto sa ulang.';
+    if (_waterTemp! > 30) return 'Mataas ang temperatura. Bantayan ang mga ulang.';
+    return 'Tamang-tama ang temperatura para sa paglaki ng ulang.';
+  }
+
+  Color get _tempColor {
+    if (_waterTemp == null) return textMuted;
+    if (_waterTemp! < 24 || _waterTemp! > 30) return warningRed;
+    return teal;
+  }
+
+  String get _oxygenStatus {
+    if (_dissolvedOxygen == null) return 'WALANG DATA';
+    if (_dissolvedOxygen! < 5.0) return 'MABABA';
+    return 'SAPAT';
+  }
+
+  String get _oxygenDescription {
+    if (_dissolvedOxygen == null) return 'Walang datos mula sa sensor.';
+    if (_dissolvedOxygen! < 5.0) {
+      return 'Mababa ang dissolved oxygen. Suriin ang sistema ng aeration.';
+    }
+    return 'May sapat na hangin para sa mga ulang.';
+  }
+
+  Color get _oxygenColor {
+    if (_dissolvedOxygen == null) return textMuted;
+    if (_dissolvedOxygen! < 5.0) return warningRed;
+    return teal;
+  }
+
+  String get _turbidityStatus {
+    if (_turbidity == null) return 'WALANG DATA';
+    if (_turbidity! > 100) return 'MALABO';
+    if (_turbidity! > 50) return 'KATAMTAMAN';
+    return 'MALINAW';
+  }
+
+  String get _turbidityDescription {
+    if (_turbidity == null) return 'Walang datos mula sa sensor.';
+    if (_turbidity! > 100) return 'Malabo ang tubig. Kailangang linisin.';
+    if (_turbidity! > 50) return 'Katamtamang kalinisan ng tubig. Bantayan pa rin.';
+    return 'Malinis ang tubig. Walang nakitang lason o dumi.';
+  }
+
+  Color get _turbidityColor {
+    if (_turbidity == null) return textMuted;
+    if (_turbidity! > 100) return warningRed;
+    if (_turbidity! > 50) return const Color(0xFFF59E0B);
+    return teal;
+  }
+
+  bool get _hasAlerts => _activeAlerts.isNotEmpty;
+
+  String get _systemStatusTitle =>
+      _hasAlerts ? 'May Babala' : 'Mabuti ang Kalagayan';
+
+  String get _systemStatusDescription {
+    if (_hasAlerts) {
+      return (_activeAlerts.first['message'] as String?) ??
+          'May aktibong babala. Suriin ang sistema agad.';
+    }
+    return 'Ligtas ang tubig at masigla ang mga ulang at tanim.';
+  }
+
+  String get _yieldDisplay =>
+      _expectedYield != null ? '${_expectedYield!.toStringAsFixed(0)} kg' : '--';
+
+  // ── BUILD ──────────────────────────────────────────────────────────────
 
   void _onNavTapped(int index) {
     if (index == _currentNavIndex) return;
     setState(() {
       _currentNavIndex = index;
-      // Ensure nav bar is visible when switching tabs
-      _isNavBarVisible = true; 
+      _isNavBarVisible = true;
     });
   }
 
@@ -57,49 +216,34 @@ class _DashboardPageState extends State<DashboardPage>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF3F4F6),
-      extendBody: true, // Allows content to scroll behind the bottom nav bar
+      extendBody: true,
       appBar: _buildTopBar(context),
-      
-      // ── MAIN CONTENT AREA WITH SCROLL LISTENER ─────────────────────────
       body: NotificationListener<ScrollNotification>(
         onNotification: (ScrollNotification notification) {
           if (notification is UserScrollNotification) {
-            // User dragging up, content moving down -> hide nav bar
             if (notification.direction == ScrollDirection.reverse) {
-              if (_isNavBarVisible) {
-                setState(() => _isNavBarVisible = false);
-              }
-            } 
-            // User dragging down, content moving up -> show nav bar
-            else if (notification.direction == ScrollDirection.forward) {
-              if (!_isNavBarVisible) {
-                setState(() => _isNavBarVisible = true);
-              }
+              if (_isNavBarVisible) setState(() => _isNavBarVisible = false);
+            } else if (notification.direction == ScrollDirection.forward) {
+              if (!_isNavBarVisible) setState(() => _isNavBarVisible = true);
             }
           }
-          
-          // Re-show nav bar when user hits the very bottom of the page
-          if (notification.metrics.pixels >= notification.metrics.maxScrollExtent - 20) {
-            if (!_isNavBarVisible) {
-              setState(() => _isNavBarVisible = true);
-            }
+          if (notification.metrics.pixels >=
+              notification.metrics.maxScrollExtent - 20) {
+            if (!_isNavBarVisible) setState(() => _isNavBarVisible = true);
           }
-          
-          return false; // Let the notification bubble up
+          return false;
         },
         child: Stack(
           children: [
             IndexedStack(
               index: _currentNavIndex,
               children: [
-                _buildDashboardView(), // Index 0: Dashboard
-                const TasksPage(),     // Index 1: Gawain
-                const YieldEstimationPage(), // Index 2: Ani
-                const LogsPage(),      // Index 3: Logs
+                _buildDashboardView(),
+                const TasksPage(),
+                const YieldEstimationPage(),
+                const LogsPage(),
               ],
             ),
-
-            // Notification dropdown overlay
             if (_showNotificationDropdown)
               Positioned(
                 top: 0,
@@ -109,12 +253,9 @@ class _DashboardPageState extends State<DashboardPage>
           ],
         ),
       ),
-
-      // ── ANIMATED BOTTOM NAVIGATION BAR ─────────────────────────────────
       bottomNavigationBar: AnimatedSlide(
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeInOutCubic,
-        // Slide out (down) if not visible, stay at 0 if visible
         offset: _isNavBarVisible ? Offset.zero : const Offset(0, 1.0),
         child: _buildBottomNavBar(),
       ),
@@ -122,18 +263,17 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   // ── DASHBOARD TAB CONTENT ──────────────────────────────────────────────
+
   Widget _buildDashboardView() {
     return FadeTransition(
       opacity: Tween<double>(begin: 0, end: 1).animate(
         CurvedAnimation(parent: _fadeController, curve: Curves.easeIn),
       ),
       child: SingleChildScrollView(
-        // The 100px bottom padding ensures content isn't permanently hidden behind the floating nav bar
         padding: const EdgeInsets.fromLTRB(16, 24, 16, 100),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Greeting
             Text(
               "Magandang Araw!",
               style: GoogleFonts.poppins(
@@ -163,7 +303,6 @@ class _DashboardPageState extends State<DashboardPage>
             _buildYieldSection(),
             const SizedBox(height: 24),
 
-            // Water Conditions
             Text(
               "Kondisyon ng Tubig",
               style: GoogleFonts.poppins(
@@ -176,29 +315,37 @@ class _DashboardPageState extends State<DashboardPage>
             _buildConditionCard(
               Icons.thermostat,
               "Temperatura",
-              "Tamang-tama para sa paglaki ng ulang.",
-              "KATAMTAMAN",
-              teal,
+              _tempDescription,
+              _tempStatus,
+              _tempColor,
+              value: _waterTemp != null
+                  ? '${_waterTemp!.toStringAsFixed(1)}°C'
+                  : null,
             ),
             const SizedBox(height: 12),
             _buildConditionCard(
               Icons.water_drop,
               "Linis ng Tubig",
-              "Walang nakitang lason o dumi.",
-              "MAAYOS",
-              teal,
+              _turbidityDescription,
+              _turbidityStatus,
+              _turbidityColor,
+              value: _turbidity != null
+                  ? '${_turbidity!.toStringAsFixed(0)} NTU'
+                  : null,
             ),
             const SizedBox(height: 12),
             _buildConditionCard(
               Icons.air,
               "Hangin (Oxygen)",
-              "May sapat na hangin para sa mga ulang.",
-              "MATAAS",
-              teal,
+              _oxygenDescription,
+              _oxygenStatus,
+              _oxygenColor,
+              value: _dissolvedOxygen != null
+                  ? '${_dissolvedOxygen!.toStringAsFixed(1)} mg/L'
+                  : null,
             ),
             const SizedBox(height: 24),
 
-            // Plant Status
             Text(
               "Status ng mga Tanim",
               style: GoogleFonts.poppins(
@@ -212,7 +359,7 @@ class _DashboardPageState extends State<DashboardPage>
               Icons.eco,
               "Mga Halaman",
               "Malusog at patuloy na lumalaki.",
-              "MAAYOS",
+              _plantHealth.toUpperCase(),
               const Color(0xFF10B981),
             ),
           ],
@@ -221,7 +368,8 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  // ── TOP BAR (no hamburger) ─────────────────────────────────────────────
+  // ── TOP BAR ────────────────────────────────────────────────────────────
+
   PreferredSizeWidget _buildTopBar(BuildContext context) {
     return PreferredSize(
       preferredSize: const Size.fromHeight(65),
@@ -241,7 +389,6 @@ class _DashboardPageState extends State<DashboardPage>
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
               children: [
-                // App logo / icon
                 Container(
                   width: 36,
                   height: 36,
@@ -264,7 +411,7 @@ class _DashboardPageState extends State<DashboardPage>
                   ),
                 ),
 
-                // Notifications
+                // Bell icon — badge appears only when there are active alerts
                 Stack(
                   clipBehavior: Clip.none,
                   children: [
@@ -281,19 +428,21 @@ class _DashboardPageState extends State<DashboardPage>
                         });
                       },
                     ),
-                    Positioned(
-                      top: 12,
-                      right: 12,
-                      child: Container(
-                        width: 10,
-                        height: 10,
-                        decoration: BoxDecoration(
-                          color: warningRed,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 2),
+                    if (_hasAlerts)
+                      Positioned(
+                        top: 12,
+                        right: 12,
+                        child: Container(
+                          width: 10,
+                          height: 10,
+                          decoration: BoxDecoration(
+                            color: warningRed,
+                            shape: BoxShape.circle,
+                            border:
+                                Border.all(color: Colors.white, width: 2),
+                          ),
                         ),
                       ),
-                    ),
                   ],
                 ),
 
@@ -337,6 +486,7 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   // ── BOTTOM NAV BAR ─────────────────────────────────────────────────────
+
   Widget _buildBottomNavBar() {
     const navItems = [
       (Icons.home_rounded, Icons.home_outlined, "Dashboard"),
@@ -420,7 +570,10 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   // ── NOTIFICATION DROPDOWN ──────────────────────────────────────────────
+
   Widget _buildNotificationDropdown() {
+    final displayed = _activeAlerts.take(5).toList();
+
     return Material(
       elevation: 8,
       borderRadius: BorderRadius.circular(12),
@@ -445,19 +598,31 @@ class _DashboardPageState extends State<DashboardPage>
               ),
             ),
             const SizedBox(height: 12),
-            _buildNotifItem(
-              Icons.assignment_late,
-              "Ulang Data Capture — URGENT",
-              "Kailangang gawin bago mag-March 06.",
-              warningRed,
-            ),
-            const Divider(height: 16),
-            _buildNotifItem(
-              Icons.water_drop,
-              "Temperatura — Normal",
-              "Wala pang pagbabago sa kondisyon.",
-              teal,
-            ),
+            if (displayed.isEmpty)
+              Text(
+                "Walang aktibong abiso.",
+                style: GoogleFonts.poppins(fontSize: 13, color: textMuted),
+              )
+            else
+              ...List.generate(displayed.length, (i) {
+                final alert = displayed[i];
+                final String title = (alert['title'] as String?) ?? 'Abiso';
+                final String message = (alert['message'] as String?) ?? '';
+                final String prio =
+                    ((alert['priority'] as String?) ?? '').toUpperCase();
+                final bool isHigh = prio == 'HIGH' || prio == 'URGENT';
+                return Column(
+                  children: [
+                    _buildNotifItem(
+                      isHigh ? Icons.assignment_late : Icons.water_drop,
+                      title,
+                      message,
+                      isHigh ? warningRed : teal,
+                    ),
+                    if (i < displayed.length - 1) const Divider(height: 16),
+                  ],
+                );
+              }),
           ],
         ),
       ),
@@ -502,15 +667,20 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   // ── CONTENT WIDGETS ────────────────────────────────────────────────────
+
   Widget _buildStatusCard() {
+    final cardColor = _hasAlerts ? warningRed : tealDark;
+    final statusIcon =
+        _hasAlerts ? Icons.warning_amber_rounded : Icons.check_circle;
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: tealDark,
+        color: cardColor,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: tealDark.withOpacity(0.3),
+            color: cardColor.withOpacity(0.3),
             blurRadius: 12,
             offset: const Offset(0, 6),
           ),
@@ -527,7 +697,7 @@ class _DashboardPageState extends State<DashboardPage>
                   color: Colors.white,
                   shape: BoxShape.circle,
                 ),
-                child: Icon(Icons.check_circle, color: tealDark, size: 28),
+                child: Icon(statusIcon, color: cardColor, size: 28),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -535,7 +705,7 @@ class _DashboardPageState extends State<DashboardPage>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      "Mabuti ang Kalagayan",
+                      _systemStatusTitle,
                       style: GoogleFonts.poppins(
                         fontSize: 20,
                         fontWeight: FontWeight.w700,
@@ -544,7 +714,7 @@ class _DashboardPageState extends State<DashboardPage>
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      "Ligtas ang tubig at masigla ang mga ulang at tanim.",
+                      _systemStatusDescription,
                       style: GoogleFonts.poppins(
                         fontSize: 14,
                         color: Colors.white.withOpacity(0.9),
@@ -559,9 +729,9 @@ class _DashboardPageState extends State<DashboardPage>
           const SizedBox(height: 24),
           Row(
             children: [
-              _buildStatusSubcard("Laki ng Ulang", "Malusog"),
+              _buildStatusSubcard("Laki ng Ulang", _shrimpHealth),
               const SizedBox(width: 16),
-              _buildStatusSubcard("Dami ng Tanim", "Sapat"),
+              _buildStatusSubcard("Dami ng Tanim", _plantHealth),
             ],
           ),
         ],
@@ -610,7 +780,11 @@ class _DashboardPageState extends State<DashboardPage>
       children: [
         Row(
           children: [
-            Icon(Icons.assignment_late, color: warningRed, size: 22),
+            Icon(
+              _hasAlerts ? Icons.assignment_late : Icons.assignment_turned_in,
+              color: _hasAlerts ? warningRed : teal,
+              size: 22,
+            ),
             const SizedBox(width: 8),
             Text(
               "Mahahalagang Gawain",
@@ -620,102 +794,163 @@ class _DashboardPageState extends State<DashboardPage>
                 color: textDark,
               ),
             ),
+            if (_hasAlerts) ...[
+              const Spacer(),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: warningRed,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '${_activeAlerts.length}',
+                  style: GoogleFonts.poppins(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
         const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: warningRed.withOpacity(0.3), width: 1.5),
-            boxShadow: [
-              BoxShadow(
-                color: warningRed.withOpacity(0.05),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFEF2F2),
-                  borderRadius: BorderRadius.circular(10),
+        if (!_hasAlerts)
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: teal.withOpacity(0.3), width: 1.5),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.check_circle_outline, color: teal, size: 20),
+                const SizedBox(width: 12),
+                Text(
+                  "Walang mahahalagang gawain ngayon.",
+                  style: GoogleFonts.poppins(fontSize: 14, color: textMuted),
                 ),
-                child: Icon(Icons.water_drop, color: warningRed, size: 24),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          "Ulang Data Capture",
-                          style: GoogleFonts.poppins(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: textDark,
-                          ),
+              ],
+            ),
+          )
+        else
+          Column(
+            children: _activeAlerts.map((alert) {
+              final String title = (alert['title'] as String?) ?? 'Babala';
+              final String message = (alert['message'] as String?) ?? '';
+              final String priority =
+                  ((alert['priority'] as String?) ?? 'URGENT').toUpperCase();
+              final bool isHigh =
+                  priority == 'HIGH' || priority == 'URGENT';
+              final Color alertColor =
+                  isHigh ? warningRed : const Color(0xFFF59E0B);
+
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: alertColor.withOpacity(0.3),
+                      width: 1.5,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: alertColor.withOpacity(0.05),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: alertColor.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(10),
                         ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: warningRed,
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            "URGENT",
-                            style: GoogleFonts.poppins(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
+                        child: Icon(Icons.warning_amber_rounded,
+                            color: alertColor, size: 24),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment:
+                                  MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    title,
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                      color: textDark,
+                                    ),
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: alertColor,
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    priority,
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
-                          ),
+                            if (message.isNotEmpty) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                message,
+                                style: GoogleFonts.poppins(
+                                  fontSize: 13,
+                                  color: textMuted,
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 12),
+                            GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  _currentNavIndex = 1;
+                                  _isNavBarVisible = true;
+                                });
+                              },
+                              child: Text(
+                                "Tingnan ang gawain →",
+                                style: GoogleFonts.poppins(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: teal,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      "Kailangang gawin bago mag-March 06.",
-                      style: GoogleFonts.poppins(
-                        fontSize: 13,
-                        color: textMuted,
                       ),
-                    ),
-                    const SizedBox(height: 12),
-                    GestureDetector(
-                      onTap: () {
-                        // Switch directly to the Tasks page via IndexedStack
-                        setState(() {
-                          _currentNavIndex = 1;
-                          _isNavBarVisible = true; // Ensure nav bar stays visible when jumping
-                        });
-                      },
-                      child: Text(
-                        "Tingnan ang gawain →",
-                        style: GoogleFonts.poppins(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: teal,
-                        ),
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              );
+            }).toList(),
           ),
-        ),
       ],
     );
   }
@@ -761,7 +996,7 @@ class _DashboardPageState extends State<DashboardPage>
           ),
           const SizedBox(height: 16),
           Text(
-            "55 kg",
+            _yieldDisplay,
             style: GoogleFonts.poppins(
               fontSize: 36,
               fontWeight: FontWeight.w800,
@@ -788,8 +1023,9 @@ class _DashboardPageState extends State<DashboardPage>
     String title,
     String description,
     String status,
-    Color themeColor,
-  ) {
+    Color themeColor, {
+    String? value,
+  }) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -821,13 +1057,28 @@ class _DashboardPageState extends State<DashboardPage>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  title,
-                  style: GoogleFonts.poppins(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: textDark,
-                  ),
+                Row(
+                  children: [
+                    Text(
+                      title,
+                      style: GoogleFonts.poppins(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: textDark,
+                      ),
+                    ),
+                    if (value != null) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        value,
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: themeColor,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
                 const SizedBox(height: 4),
                 Text(
