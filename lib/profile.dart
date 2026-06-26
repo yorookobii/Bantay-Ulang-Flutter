@@ -28,13 +28,16 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
 
   File? _profileImage;
   late TextEditingController _addressController;
+  late TextEditingController _fullNameController;
   bool _isEditingAddress = false;
+  bool _isEditingFullName = false;
 
   String _fullName = '';
   String _email = '';
   String _role = '';
   bool _isLoading = true;
   bool _isSaving = false;
+  String? _loadError;
 
   String get _initials {
     final parts = _fullName.trim().split(' ');
@@ -48,6 +51,7 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
     super.initState();
     _scaffoldKey = GlobalKey<ScaffoldState>();
     _addressController = TextEditingController();
+    _fullNameController = TextEditingController();
     _fadeController = AnimationController(
       duration: const Duration(milliseconds: 1000),
       vsync: this,
@@ -59,21 +63,32 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    final doc = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .get();
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    final data = doc.data() ?? {};
-    setState(() {
-      _fullName = data['fullName'] ?? '';
-      _email = user.email ?? '';
-      _role = data['role'] ?? 'user';
-      _addressController.text = data['address'] ?? '';
-      _isLoading = false;
-    });
+      final data = doc.data() ?? {};
+      setState(() {
+        _fullName = data['fullName'] ?? '';
+        _email = user.email ?? '';
+        _role = data['role'] ?? 'user';
+        _fullNameController.text = data['fullName'] ?? '';
+        _addressController.text = data['address'] ?? '';
+        _isLoading = false;
+        _loadError = null;
+      });
+    } catch (e) {
+      debugPrint('Failed to load user data: $e');
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _loadError = 'Hindi ma-load ang profile. Subukan muli.';
+      });
+    }
   }
 
   Future<void> _updateProfile() async {
@@ -82,30 +97,55 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
 
     setState(() => _isSaving = true);
 
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(user.uid)
-        .update({'address': _addressController.text.trim()});
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .update({
+        'fullName': _fullNameController.text.trim(),
+        'address': _addressController.text.trim(),
+      });
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    setState(() {
-      _isSaving = false;
-      _isEditingAddress = false;
-    });
+      setState(() {
+        _fullName = _fullNameController.text.trim();
+        _isSaving = false;
+        _isEditingFullName = false;
+        _isEditingAddress = false;
+      });
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Profile updated.', style: GoogleFonts.poppins()),
-        backgroundColor: teal,
-        duration: const Duration(seconds: 2),
-      ),
-    );
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Profile updated.', style: GoogleFonts.poppins()),
+          backgroundColor: teal,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      debugPrint('Failed to update profile: $e');
+      if (!mounted) return;
+      setState(() => _isSaving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Hindi ma-update ang profile. Subukan muli.',
+            style: GoogleFonts.poppins(),
+          ),
+          backgroundColor: const Color(0xFFDC2626),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   @override
   void dispose() {
     _addressController.dispose();
+    _fullNameController.dispose();
     _fadeController.dispose();
     super.dispose();
   }
@@ -119,7 +159,52 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
       appBar: _buildTopBar(context),
       body: _isLoading
           ? Center(child: CircularProgressIndicator(color: teal))
-          : FadeTransition(
+          : _loadError != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.cloud_off_rounded, size: 56, color: const Color(0xFF6B7280)),
+                        const SizedBox(height: 16),
+                        Text(
+                          _loadError!,
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.poppins(
+                            fontSize: 15,
+                            color: const Color(0xFF6B7280),
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        ElevatedButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              _isLoading = true;
+                              _loadError = null;
+                            });
+                            _loadUserData();
+                          },
+                          icon: const Icon(Icons.refresh_rounded),
+                          label: Text(
+                            "Subukan Muli",
+                            style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: teal,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            elevation: 0,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : FadeTransition(
         opacity: Tween<double>(begin: 0, end: 1).animate(
           CurvedAnimation(parent: _fadeController, curve: Curves.easeInOut),
         ),
@@ -223,7 +308,7 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildInfoField("Full Name", _fullName),
+                    _buildFullNameField(),
                     const SizedBox(height: 16),
                     _buildInfoField("Role", _role),
                     const SizedBox(height: 16),
@@ -284,74 +369,43 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
               ),
               const SizedBox(height: 12),
 
-              // Delete Account Button
+              // Log Out Button
               Material(
                 color: Colors.transparent,
                 child: InkWell(
-                  onTap: () {
-                    showDialog(
-                      context: context,
-                      builder: (BuildContext context) => AlertDialog(
-                        title: Text(
-                          "Delete Account",
-                          style: GoogleFonts.poppins(
-                            fontWeight: FontWeight.w700,
-                            color: const Color(0xFFDC2626),
-                          ),
-                        ),
-                        content: Text(
-                          "Are you sure you want to delete your account? This action cannot be undone.",
-                          style: GoogleFonts.poppins(),
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context),
-                            child: Text(
-                              "Cancel",
-                              style: GoogleFonts.poppins(
-                                fontWeight: FontWeight.w600,
-                                color: teal,
-                              ),
-                            ),
-                          ),
-                          TextButton(
-                            onPressed: () {
-                              Navigator.pop(context);
-                              Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
-                            },
-                            child: Text(
-                              "Delete",
-                              style: GoogleFonts.poppins(
-                                fontWeight: FontWeight.w600,
-                                color: const Color(0xFFDC2626),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
+                  onTap: () async {
+                    await FirebaseAuth.instance.signOut();
+                    if (!mounted) return;
+                    Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
                   },
                   borderRadius: BorderRadius.circular(12),
                   child: Container(
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFFEE2E2),
+                      color: Colors.white,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: const Color(0xFFFECACA),
+                        color: teal.withOpacity(0.4),
                         width: 1.5,
                       ),
                     ),
                     child: Center(
-                      child: Text(
-                        "Delete Account",
-                        style: GoogleFonts.poppins(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: const Color(0xFFDC2626),
-                          letterSpacing: 0.5,
-                        ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.logout, color: tealDark, size: 18),
+                          const SizedBox(width: 8),
+                          Text(
+                            "Log Out",
+                            style: GoogleFonts.poppins(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                              color: tealDark,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -413,6 +467,74 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildFullNameField() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              "Full Name",
+              style: GoogleFonts.poppins(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFF6B7280),
+                letterSpacing: 0.3,
+              ),
+            ),
+            GestureDetector(
+              onTap: () => setState(() => _isEditingFullName = !_isEditingFullName),
+              child: Text(
+                _isEditingFullName ? "Kanselahin" : "Edit",
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: teal,
+                  letterSpacing: 0.3,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        _isEditingFullName
+            ? TextField(
+                controller: _fullNameController,
+                textCapitalization: TextCapitalization.words,
+                decoration: InputDecoration(
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: teal.withOpacity(0.3)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: teal.withOpacity(0.3)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(color: teal, width: 2),
+                  ),
+                  contentPadding: const EdgeInsets.all(12),
+                ),
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: const Color(0xFF111827),
+                ),
+              )
+            : Text(
+                _fullNameController.text.isNotEmpty ? _fullNameController.text : _fullName,
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: const Color(0xFF111827),
+                ),
+              ),
+      ],
     );
   }
 

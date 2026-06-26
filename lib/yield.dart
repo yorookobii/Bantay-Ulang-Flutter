@@ -35,10 +35,14 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
   double _survivalRate = 0;
   String _summaryNote = '';
 
-  // Local market price (not from Firebase)
-  final double marketPricePerKg = 500.0;
+  // Market price range (min/avg/max per kg)
+  static const double _priceMin = 250.0;
+  static const double _priceAvg = 425.0;
+  static const double _priceMax = 600.0;
 
-  double get estimatedRevenue => _expectedYield * marketPricePerKg;
+  double get _incomeMin => _expectedYield * _priceMin;
+  double get _incomeAvg => _expectedYield * _priceAvg;
+  double get _incomeMax => _expectedYield * _priceMax;
 
   @override
   void initState() {
@@ -56,24 +60,30 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
         .orderBy('timestamp', descending: true)
         .limit(1)
         .snapshots()
-        .listen((snapshot) {
-      if (!mounted) return;
-      if (snapshot.docs.isEmpty) {
+        .listen(
+      (snapshot) {
+        if (!mounted) return;
+        if (snapshot.docs.isEmpty) {
+          setState(() => _isLoading = false);
+          return;
+        }
+        final data = snapshot.docs.first.data() as Map<String, dynamic>;
+        setState(() {
+          _isLoading = false;
+          _expectedYield = (data['expectedYield'] as num?)?.toDouble() ?? 0;
+          _avgWeightPerPiece = (data['avgWeightPerPiece'] as num?)?.toDouble() ?? 0;
+          _cycleStart = (data['cycleStart'] as Timestamp?)?.toDate();
+          _cycleEnd = (data['cycleEnd'] as Timestamp?)?.toDate();
+          _targetHarvestDate = (data['targetHarvestDate'] as Timestamp?)?.toDate();
+          _survivalRate = (data['survivalRate'] as num?)?.toDouble() ?? 0;
+          _summaryNote = (data['summaryNote'] as String?) ?? '';
+        });
+      },
+      onError: (error) {
+        if (!mounted) return;
         setState(() => _isLoading = false);
-        return;
-      }
-      final data = snapshot.docs.first.data() as Map<String, dynamic>;
-      setState(() {
-        _isLoading = false;
-        _expectedYield = (data['expectedYield'] as num?)?.toDouble() ?? 0;
-        _avgWeightPerPiece = (data['avgWeightPerPiece'] as num?)?.toDouble() ?? 0;
-        _cycleStart = (data['cycleStart'] as Timestamp?)?.toDate();
-        _cycleEnd = (data['cycleEnd'] as Timestamp?)?.toDate();
-        _targetHarvestDate = (data['targetHarvestDate'] as Timestamp?)?.toDate();
-        _survivalRate = (data['survivalRate'] as num?)?.toDouble() ?? 0;
-        _summaryNote = (data['summaryNote'] as String?) ?? '';
-      });
-    });
+      },
+    );
   }
 
   @override
@@ -205,8 +215,8 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
 
                       // Market Price Factor taking full width for emphasis
                       _buildFactorCard(
-                        "Kasalukuyang Presyo sa Merkado",
-                        "₱${marketPricePerKg.toStringAsFixed(0)} / kg",
+                        "Presyo sa Merkado (Min–Max)",
+                        "₱${_priceMin.toStringAsFixed(0)}–₱${_priceMax.toStringAsFixed(0)} / kg",
                         Icons.storefront,
                         isFullWidth: true,
                       ),
@@ -331,7 +341,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
 
           // Revenue Section
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 20),
             decoration: BoxDecoration(
               color: Colors.white.withOpacity(0.1),
               borderRadius: const BorderRadius.only(
@@ -339,39 +349,48 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                 bottomRight: Radius.circular(16),
               ),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.center,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                Row(
                   children: [
+                    Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.payments, color: Colors.white, size: 18),
+                    ),
+                    const SizedBox(width: 10),
                     Text(
                       "Inaasahang Kita (Gross Revenue)",
                       style: GoogleFonts.poppins(
                         fontSize: 13,
-                        fontWeight: FontWeight.w500,
+                        fontWeight: FontWeight.w600,
                         color: Colors.white.withOpacity(0.9),
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      "₱${estimatedRevenue.toStringAsFixed(2)}",
-                      style: GoogleFonts.poppins(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
                       ),
                     ),
                   ],
                 ),
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
-                    shape: BoxShape.circle,
+                const SizedBox(height: 14),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _buildIncomeColumn("Min", _incomeMin, Colors.white.withOpacity(0.75)),
+                    Container(width: 1, height: 40, color: Colors.white.withOpacity(0.2)),
+                    _buildIncomeColumn("Avg", _incomeAvg, Colors.white),
+                    Container(width: 1, height: 40, color: Colors.white.withOpacity(0.2)),
+                    _buildIncomeColumn("Max", _incomeMax, Colors.white.withOpacity(0.75)),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  "Batay sa presyo na ₱${_priceMin.toStringAsFixed(0)}–₱${_priceMax.toStringAsFixed(0)} / kg sa merkado",
+                  style: GoogleFonts.poppins(
+                    fontSize: 11,
+                    color: Colors.white.withOpacity(0.65),
                   ),
-                  child: const Icon(Icons.payments, color: Colors.white, size: 24),
                 ),
               ],
             ),
@@ -517,10 +536,44 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
     return isFullWidth ? cardContent : Expanded(child: cardContent);
   }
 
+  Widget _buildIncomeColumn(String label, double amount, Color valueColor) {
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Text(
+            label,
+            style: GoogleFonts.poppins(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: Colors.white.withOpacity(0.7),
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _expectedYield > 0 ? "₱${_formatIncome(amount)}" : "—",
+            style: GoogleFonts.poppins(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: valueColor,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatIncome(double amount) {
+    if (amount >= 1000000) return "${(amount / 1000000).toStringAsFixed(1)}M";
+    if (amount >= 1000) return "${(amount / 1000).toStringAsFixed(1)}K";
+    return amount.toStringAsFixed(0);
+  }
+
   Widget _buildRecommendationCard() {
     final note = _summaryNote.isNotEmpty
         ? _summaryNote
-        : "Normal ang takbo ng paglaki. Panatilihin ang regular na pagpapakain upang maabot o mahigitan pa ang ₱${estimatedRevenue.toStringAsFixed(0)} na potensyal na kita.";
+        : "Normal ang takbo ng paglaki. Panatilihin ang regular na pagpapakain upang maabot o mahigitan pa ang tinatayang ₱${_formatIncome(_incomeAvg)} na kita (average).";
 
     return Container(
       padding: const EdgeInsets.all(16),

@@ -26,6 +26,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
   List<QueryDocumentSnapshot> _ulangLogs = [];
   List<QueryDocumentSnapshot> _plantLogs = [];
   bool _isLoading = true;
+  String? _errorMessage;
   bool _isSavingUlang = false;
   bool _isSavingPlant = false;
 
@@ -61,6 +62,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
         if (!mounted) return;
         setState(() {
           _isLoading = false;
+          _errorMessage = null;
           _ulangLogs = snapshot.docs.where((d) {
             final data = d.data() as Map<String, dynamic>;
             return data['type'] == 'ulang';
@@ -71,8 +73,14 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
           }).toList();
         });
       },
-      onError: (_) {
-        if (mounted) setState(() => _isLoading = false);
+      onError: (error) {
+        debugPrint('Logs subscription error: $error');
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _errorMessage = 'Hindi ma-load ang mga tala. Subukan muli.';
+          });
+        }
       },
     );
   }
@@ -260,7 +268,44 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
           ),
           child: _isLoading
               ? Center(child: CircularProgressIndicator(color: teal))
-              : TabBarView(
+              : _errorMessage != null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(32),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.cloud_off_rounded, size: 56, color: textMuted),
+                            const SizedBox(height: 16),
+                            Text(
+                              _errorMessage!,
+                              textAlign: TextAlign.center,
+                              style: GoogleFonts.poppins(fontSize: 15, color: textMuted, fontWeight: FontWeight.w500),
+                            ),
+                            const SizedBox(height: 20),
+                            ElevatedButton.icon(
+                              onPressed: () {
+                                _logsSub?.cancel();
+                                setState(() {
+                                  _isLoading = true;
+                                  _errorMessage = null;
+                                });
+                                _subscribeLogs();
+                              },
+                              icon: const Icon(Icons.refresh_rounded),
+                              label: Text("Subukan Muli", style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: teal,
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                elevation: 0,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : TabBarView(
                   children: [
                     _buildUlangTab(),
                     _buildPlantTab(),
