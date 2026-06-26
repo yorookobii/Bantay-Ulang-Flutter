@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -38,7 +39,7 @@ class _DashboardPageState extends State<DashboardPage>
   double? _turbidity;
   double? _waterLevel;
 
-  // Live data from growth_indicators
+  // Live data from growth_indicators (populated via YieldEstimationPage callback)
   double? _expectedYield;
   String _shrimpHealth = 'Malusog';
   String _plantHealth = 'Maayos';
@@ -46,9 +47,11 @@ class _DashboardPageState extends State<DashboardPage>
   // Live data from alerts
   List<Map<String, dynamic>> _activeAlerts = [];
 
+  // Profile
+  String _initials = '?';
+
   // Firestore subscriptions
   StreamSubscription<QuerySnapshot>? _sensorSub;
-  StreamSubscription<QuerySnapshot>? _growthSub;
   StreamSubscription<QuerySnapshot>? _alertsSub;
 
   @override
@@ -59,8 +62,8 @@ class _DashboardPageState extends State<DashboardPage>
       vsync: this,
     )..forward();
     _subscribeSensorReadings();
-    _subscribeGrowthIndicators();
     _subscribeAlerts();
+    _loadUserInitials();
   }
 
   void _subscribeSensorReadings() {
@@ -69,35 +72,22 @@ class _DashboardPageState extends State<DashboardPage>
         .orderBy('timestamp', descending: true)
         .limit(1)
         .snapshots()
-        .listen((snapshot) {
-      if (snapshot.docs.isEmpty) return;
-      final data = snapshot.docs.first.data() as Map<String, dynamic>;
-      setState(() {
-        _waterTemp = (data['waterTemp'] as num?)?.toDouble();
-        _phLevel = (data['phLevel'] as num?)?.toDouble();
-        _dissolvedOxygen = (data['dissolvedOxygen'] as num?)?.toDouble();
-        _salinity = (data['salinity'] as num?)?.toDouble();
-        _turbidity = (data['turbidity'] as num?)?.toDouble();
-        _waterLevel = (data['waterLevel'] as num?)?.toDouble();
-      });
-    });
-  }
-
-  void _subscribeGrowthIndicators() {
-    _growthSub = FirebaseFirestore.instance
-        .collection('growth_indicators')
-        .orderBy('timestamp', descending: true)
-        .limit(1)
-        .snapshots()
-        .listen((snapshot) {
-      if (snapshot.docs.isEmpty) return;
-      final data = snapshot.docs.first.data() as Map<String, dynamic>;
-      setState(() {
-        _expectedYield = (data['expectedYield'] as num?)?.toDouble();
-        _shrimpHealth = (data['shrimpHealth'] as String?) ?? 'Malusog';
-        _plantHealth = (data['plantHealth'] as String?) ?? 'Maayos';
-      });
-    });
+        .listen(
+      (snapshot) {
+        if (!mounted) return;
+        if (snapshot.docs.isEmpty) return;
+        final data = snapshot.docs.first.data() as Map<String, dynamic>;
+        setState(() {
+          _waterTemp = (data['waterTemp'] as num?)?.toDouble();
+          _phLevel = (data['phLevel'] as num?)?.toDouble();
+          _dissolvedOxygen = (data['dissolvedOxygen'] as num?)?.toDouble();
+          _salinity = (data['salinity'] as num?)?.toDouble();
+          _turbidity = (data['turbidity'] as num?)?.toDouble();
+          _waterLevel = (data['waterLevel'] as num?)?.toDouble();
+        });
+      },
+      onError: (error) => debugPrint('Sensor readings subscription error: $error'),
+    );
   }
 
   void _subscribeAlerts() {
@@ -105,20 +95,41 @@ class _DashboardPageState extends State<DashboardPage>
         .collection('alerts')
         .where('status', isEqualTo: 'active')
         .snapshots()
-        .listen((snapshot) {
-      setState(() {
-        _activeAlerts = snapshot.docs.map((doc) {
-          return {'id': doc.id, ...doc.data() as Map<String, dynamic>};
-        }).toList();
-      });
-    });
+        .listen(
+      (snapshot) {
+        if (!mounted) return;
+        setState(() {
+          _activeAlerts = snapshot.docs.map((doc) {
+            return {'id': doc.id, ...doc.data() as Map<String, dynamic>};
+          }).toList();
+        });
+      },
+      onError: (error) => debugPrint('Alerts subscription error: $error'),
+    );
+  }
+
+  Future<void> _loadUserInitials() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    try {
+      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      if (!mounted) return;
+      final fullName = (doc.data()?['fullName'] as String?) ?? '';
+      if (fullName.isEmpty) return;
+      final parts = fullName.trim().split(' ');
+      final initials = parts.length == 1
+          ? parts[0][0].toUpperCase()
+          : '${parts[0][0]}${parts[parts.length - 1][0]}'.toUpperCase();
+      setState(() => _initials = initials);
+    } catch (e) {
+      debugPrint('Failed to load user initials: $e');
+    }
   }
 
   @override
   void dispose() {
     _fadeController.dispose();
     _sensorSub?.cancel();
-    _growthSub?.cancel();
     _alertsSub?.cancel();
     super.dispose();
   }
@@ -240,7 +251,16 @@ class _DashboardPageState extends State<DashboardPage>
               children: [
                 _buildDashboardView(),
                 const TasksPage(),
-                const YieldEstimationPage(),
+                YieldEstimationPage(
+                  onGrowthData: (expectedYield, shrimpHealth, plantHealth) {
+                    if (!mounted) return;
+                    setState(() {
+                      _expectedYield = expectedYield;
+                      _shrimpHealth = shrimpHealth;
+                      _plantHealth = plantHealth;
+                    });
+                  },
+                ),
                 const LogsPage(),
               ],
             ),
@@ -467,7 +487,7 @@ class _DashboardPageState extends State<DashboardPage>
                     ),
                     child: Center(
                       child: Text(
-                        "JD",
+                        _initials,
                         style: TextStyle(
                           color: tealDark,
                           fontWeight: FontWeight.w700,

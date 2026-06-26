@@ -4,7 +4,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class YieldEstimationPage extends StatefulWidget {
-  const YieldEstimationPage({super.key});
+  final void Function(double expectedYield, String shrimpHealth, String plantHealth)? onGrowthData;
+  const YieldEstimationPage({super.key, this.onGrowthData});
 
   @override
   State<YieldEstimationPage> createState() => _YieldEstimationPageState();
@@ -34,6 +35,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
   DateTime? _targetHarvestDate;
   double _survivalRate = 0;
   String _summaryNote = '';
+  String? _errorMessage;
 
   // Market price range (min/avg/max per kg)
   static const double _priceMin = 250.0;
@@ -68,9 +70,13 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
           return;
         }
         final data = snapshot.docs.first.data() as Map<String, dynamic>;
+        final expectedYield = (data['expectedYield'] as num?)?.toDouble() ?? 0;
+        final shrimpHealth = (data['shrimpHealth'] as String?) ?? 'Malusog';
+        final plantHealth = (data['plantHealth'] as String?) ?? 'Maayos';
         setState(() {
           _isLoading = false;
-          _expectedYield = (data['expectedYield'] as num?)?.toDouble() ?? 0;
+          _errorMessage = null;
+          _expectedYield = expectedYield;
           _avgWeightPerPiece = (data['avgWeightPerPiece'] as num?)?.toDouble() ?? 0;
           _cycleStart = (data['cycleStart'] as Timestamp?)?.toDate();
           _cycleEnd = (data['cycleEnd'] as Timestamp?)?.toDate();
@@ -78,10 +84,15 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
           _survivalRate = (data['survivalRate'] as num?)?.toDouble() ?? 0;
           _summaryNote = (data['summaryNote'] as String?) ?? '';
         });
+        widget.onGrowthData?.call(expectedYield, shrimpHealth, plantHealth);
       },
       onError: (error) {
+        debugPrint('Growth indicators subscription error: $error');
         if (!mounted) return;
-        setState(() => _isLoading = false);
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'Hindi ma-load ang datos ng ani. Subukan muli.';
+        });
       },
     );
   }
@@ -95,24 +106,29 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
 
   Future<void> _recalculateYield() async {
     setState(() => _isRecalculating = true);
-    await Future.delayed(const Duration(milliseconds: 500));
-    if (mounted) {
-      setState(() => _isRecalculating = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle, color: Colors.white),
-              const SizedBox(width: 12),
-              Text("Updated na ang inaasahang ani at kita.", style: GoogleFonts.poppins()),
-            ],
-          ),
-          backgroundColor: tealDark,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    await Future.delayed(const Duration(milliseconds: 300));
+    if (!mounted) return;
+    setState(() => _isRecalculating = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.sync, color: Colors.white),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                "Awtomatikong ina-update ang datos sa real-time.",
+                style: GoogleFonts.poppins(),
+              ),
+            ),
+          ],
         ),
-      );
-    }
+        backgroundColor: tealDark,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   String _fmtDate(DateTime? d) {
@@ -131,7 +147,41 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
         ),
         child: _isLoading
             ? Center(child: CircularProgressIndicator(color: teal))
-            : RefreshIndicator(
+            : _errorMessage != null
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.cloud_off_rounded, size: 56, color: textMuted),
+                          const SizedBox(height: 16),
+                          Text(
+                            _errorMessage!,
+                            textAlign: TextAlign.center,
+                            style: GoogleFonts.poppins(fontSize: 15, color: textMuted, fontWeight: FontWeight.w500),
+                          ),
+                          const SizedBox(height: 20),
+                          ElevatedButton.icon(
+                            onPressed: () {
+                              _growthSub?.cancel();
+                              setState(() { _isLoading = true; _errorMessage = null; });
+                              _subscribeGrowthIndicators();
+                            },
+                            icon: const Icon(Icons.refresh_rounded),
+                            label: Text("Subukan Muli", style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: teal,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              elevation: 0,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : RefreshIndicator(
                 onRefresh: _recalculateYield,
                 color: teal,
                 child: SingleChildScrollView(

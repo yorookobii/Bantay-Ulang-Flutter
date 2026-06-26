@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'logs.dart';
+// logs import removed — task cards no longer navigate to LogsPage;
 
 class TasksPage extends StatefulWidget {
   const TasksPage({super.key});
@@ -26,6 +26,7 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
 
   List<QueryDocumentSnapshot> _tasks = [];
   bool _isLoading = true;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -38,8 +39,10 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
   }
 
   void _subscribeTasks() {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
     _tasksSub = FirebaseFirestore.instance
         .collection('tasks')
+        .where('assignedTo', isEqualTo: uid)
         .orderBy('createdAt', descending: true)
         .snapshots()
         .listen(
@@ -47,11 +50,17 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
         if (!mounted) return;
         setState(() {
           _isLoading = false;
+          _errorMessage = null;
           _tasks = snapshot.docs;
         });
       },
-      onError: (_) {
-        if (mounted) setState(() => _isLoading = false);
+      onError: (error) {
+        debugPrint('Tasks subscription error: $error');
+        if (!mounted) return;
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'Hindi ma-load ang mga gawain. Subukan muli.';
+        });
       },
     );
   }
@@ -64,10 +73,25 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
   }
 
   Future<void> _markAsCompleted(String docId) async {
-    await FirebaseFirestore.instance
-        .collection('tasks')
-        .doc(docId)
-        .update({'status': 'done'});
+    try {
+      await FirebaseFirestore.instance
+          .collection('tasks')
+          .doc(docId)
+          .update({'status': 'done'});
+    } catch (e) {
+      debugPrint('Failed to mark task complete: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Hindi ma-update ang gawain. Subukan muli.', style: GoogleFonts.poppins()),
+            backgroundColor: const Color(0xFFDC2626),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _showAddTaskDialog() async {
@@ -135,14 +159,33 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
                       if (titleCtrl.text.trim().isEmpty) return;
                       setDialogState(() => saving = true);
                       final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-                      await FirebaseFirestore.instance.collection('tasks').add({
-                        'title': titleCtrl.text.trim(),
-                        'description': descCtrl.text.trim(),
-                        'status': 'pending',
-                        'createdAt': FieldValue.serverTimestamp(),
-                        'assignedTo': uid,
-                      });
-                      if (ctx.mounted) Navigator.pop(ctx);
+                      try {
+                        await FirebaseFirestore.instance.collection('tasks').add({
+                          'title': titleCtrl.text.trim(),
+                          'description': descCtrl.text.trim(),
+                          'status': 'pending',
+                          'createdAt': FieldValue.serverTimestamp(),
+                          'assignedTo': uid,
+                        });
+                        if (ctx.mounted) Navigator.pop(ctx);
+                      } catch (e) {
+                        debugPrint('Failed to add task: $e');
+                        setDialogState(() => saving = false);
+                        if (ctx.mounted) {
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Hindi ma-save ang gawain. Subukan muli.',
+                                style: GoogleFonts.poppins(),
+                              ),
+                              backgroundColor: const Color(0xFFDC2626),
+                              behavior: SnackBarBehavior.floating,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              margin: const EdgeInsets.all(16),
+                            ),
+                          );
+                        }
+                      }
                     },
               style: ElevatedButton.styleFrom(
                 backgroundColor: teal,
@@ -231,7 +274,41 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
         ),
         child: _isLoading
             ? Center(child: CircularProgressIndicator(color: teal))
-            : SingleChildScrollView(
+            : _errorMessage != null
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.cloud_off_rounded, size: 56, color: textMuted),
+                          const SizedBox(height: 16),
+                          Text(
+                            _errorMessage!,
+                            textAlign: TextAlign.center,
+                            style: GoogleFonts.poppins(fontSize: 15, color: textMuted, fontWeight: FontWeight.w500),
+                          ),
+                          const SizedBox(height: 20),
+                          ElevatedButton.icon(
+                            onPressed: () {
+                              _tasksSub?.cancel();
+                              setState(() { _isLoading = true; _errorMessage = null; });
+                              _subscribeTasks();
+                            },
+                            icon: const Icon(Icons.refresh_rounded),
+                            label: Text("Subukan Muli", style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: teal,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              elevation: 0,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(16, 24, 16, 120),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -306,10 +383,7 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(16),
         child: InkWell(
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const LogsPage()),
-          ),
+          onTap: null,
           borderRadius: BorderRadius.circular(16),
           child: Padding(
             padding: const EdgeInsets.all(20),
