@@ -29,6 +29,8 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
   String? _errorMessage;
   bool _isSavingUlang = false;
   bool _isSavingPlant = false;
+  List<QueryDocumentSnapshot> _ulangGrowthRecords = [];
+  StreamSubscription<QuerySnapshot>? _growthRecordsSub;
 
   // Ulang form controllers
   final sizeController = TextEditingController();
@@ -50,6 +52,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
       vsync: this,
     )..forward();
     _subscribeLogs();
+    _subscribeGrowthRecords();
   }
 
   void _subscribeLogs() {
@@ -85,9 +88,63 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
     );
   }
 
+  void _subscribeGrowthRecords() {
+    _growthRecordsSub = FirebaseFirestore.instance
+        .collection('ulang_growth_records')
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .listen(
+      (snapshot) {
+        if (!mounted) return;
+        setState(() => _ulangGrowthRecords = snapshot.docs);
+      },
+      onError: (error) => debugPrint('Growth records subscription error: $error'),
+    );
+  }
+
+  Future<void> _recalculateAndUpdateGrowthIndicators() async {
+    try {
+      final recordsSnap = await FirebaseFirestore.instance
+          .collection('ulang_growth_records')
+          .get();
+
+      if (recordsSnap.docs.isEmpty) return;
+
+      double totalWeight = 0;
+      for (final doc in recordsSnap.docs) {
+        totalWeight += (doc.data()['weight'] as num?)?.toDouble() ?? 0;
+      }
+      final avgWeight = totalWeight / recordsSnap.docs.length;
+
+      final indicatorsSnap = await FirebaseFirestore.instance
+          .collection('growth_indicators')
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .get();
+
+      if (indicatorsSnap.docs.isEmpty) return;
+
+      final indicatorDoc = indicatorsSnap.docs.first;
+      final data = indicatorDoc.data() as Map<String, dynamic>;
+      final initialStock = (data['initialStock'] as num?)?.toDouble() ?? 0;
+      final survivalRate = (data['survivalRate'] as num?)?.toDouble() ?? 0;
+
+      final updates = <String, dynamic>{'avgWeightPerPiece': avgWeight};
+      if (initialStock > 0 && survivalRate > 0) {
+        updates['expectedYield'] =
+            initialStock * (survivalRate / 100) * (avgWeight / 1000);
+      }
+
+      await indicatorDoc.reference.update(updates);
+    } catch (e) {
+      debugPrint('Failed to recalculate growth indicators: $e');
+    }
+  }
+
   @override
   void dispose() {
     _logsSub?.cancel();
+    _growthRecordsSub?.cancel();
     _fadeController.dispose();
     sizeController.dispose();
     weightController.dispose();
@@ -106,6 +163,9 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
     setState(() => _isSavingUlang = true);
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+      final sizeNum = double.tryParse(sizeController.text.trim()) ?? 0;
+      final weightNum = double.tryParse(weightController.text.trim()) ?? 0;
+
       await FirebaseFirestore.instance.collection('logs').add({
         'title': 'Ulang Log',
         'description': 'Laki: ${sizeController.text.trim()}cm • Timbang: ${weightController.text.trim()}g',
@@ -116,6 +176,16 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
         'weight': weightController.text.trim(),
         'observedAt': Timestamp.fromDate(selectedDate),
       });
+
+      await FirebaseFirestore.instance.collection('ulang_growth_records').add({
+        'size': sizeNum,
+        'weight': weightNum,
+        'recordedBy': uid,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      await _recalculateAndUpdateGrowthIndicators();
+
       sizeController.clear();
       weightController.clear();
       _showSuccessSnackbar("Matagumpay na na-save ang tala ng Ulang.");
@@ -172,14 +242,14 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
       final weekEnd = now.subtract(Duration(days: (3 - i) * 7));
       final weekStart = weekEnd.subtract(const Duration(days: 6));
       double total = 0;
-      for (final doc in _ulangLogs) {
+      for (final doc in _ulangGrowthRecords) {
         final data = doc.data() as Map<String, dynamic>;
-        final ts = data['observedAt'] as Timestamp?;
+        final ts = data['createdAt'] as Timestamp?;
         if (ts == null) continue;
         final date = ts.toDate();
         if (date.isAfter(weekStart.subtract(const Duration(days: 1))) &&
             date.isBefore(weekEnd.add(const Duration(days: 1)))) {
-          total += parseWeight(data['weight'] ?? '0');
+          total += (data['weight'] as num?)?.toDouble() ?? 0;
         }
       }
       return {
