@@ -106,15 +106,24 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
           .doc(credential.user!.uid)
           .get();
 
-      if (!mounted) return;
-
       final role = doc.data()?['role'] ?? 'user';
 
-      if (role == 'admin') {
-        Navigator.pushReplacementNamed(context, '/admin');
-      } else {
-        Navigator.pushReplacementNamed(context, '/dashboard');
+      // Only farm users (role == 'user') may access this app. Admins and
+      // technicians must use the web portal, so block them and sign out.
+      if (role != 'user') {
+        await FirebaseAuth.instance.signOut();
+        if (!mounted) return;
+        setState(() {
+          errorMessage =
+              'This app is for farm users only. Please use the web portal.';
+          _isLoading = false;
+        });
+        return;
       }
+
+      if (!mounted) return;
+
+      Navigator.pushReplacementNamed(context, '/dashboard');
     } on FirebaseAuthException catch (e) {
       setState(() {
         errorMessage = _authErrorMessage(e.code);

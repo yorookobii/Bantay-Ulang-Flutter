@@ -247,7 +247,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                           _buildFactorCard(
                             "Avg. Timbang",
                             _avgWeightPerPiece > 0
-                                ? "${_avgWeightPerPiece.toStringAsFixed(0)}g"
+                                ? "${_avgWeightPerPiece.toStringAsFixed(1)}g"
                                 : "—",
                             Icons.scale,
                           ),

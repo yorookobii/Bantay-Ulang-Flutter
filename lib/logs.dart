@@ -39,10 +39,35 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
 
   // Plant form controllers
   final plantHeightController = TextEditingController();
-  final plantConditionController = TextEditingController();
   String? selectedPlantStage;
   String? selectedPlantName;
+  String? selectedPlantCondition;
   DateTime plantDate = DateTime.now();
+
+  // Predefined options (validation must match these)
+  static const List<String> _plantNames = ['Mint', 'Oregano', 'Kangkong'];
+  static const List<String> _plantStages = [
+    'Seedling',
+    'Vegetative',
+    'Pre-Flowering',
+    'Harvest',
+  ];
+  static const List<String> _plantConditions = [
+    'Malusog',
+    'Dilaw',
+    'Nalalanta',
+    'May Peste',
+  ];
+
+  // Ulang input ranges
+  static const double _sizeMin = 0.1;
+  static const double _sizeMax = 30.0;
+  static const double _weightMin = 0.1;
+  static const double _weightMax = 500.0;
+
+  // Plant height range
+  static const double _heightMin = 0.0;
+  static const double _heightMax = 100.0;
 
   @override
   void initState() {
@@ -149,7 +174,6 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
     sizeController.dispose();
     weightController.dispose();
     plantHeightController.dispose();
-    plantConditionController.dispose();
     super.dispose();
   }
 
@@ -159,21 +183,40 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
 
   Future<void> _saveUlangLog() async {
     if (_isSavingUlang) return;
-    if (sizeController.text.trim().isEmpty || weightController.text.trim().isEmpty) return;
+
+    final sizeText = sizeController.text.trim();
+    final weightText = weightController.text.trim();
+    final sizeNum = double.tryParse(sizeText);
+    final weightNum = double.tryParse(weightText);
+
+    // Validate size: must be a number between _sizeMin and _sizeMax cm.
+    if (sizeNum == null || sizeNum < _sizeMin || sizeNum > _sizeMax) {
+      _showErrorSnackbar(
+        "Ang laki ay dapat numerong nasa pagitan ng ${_sizeMin.toStringAsFixed(1)} at ${_sizeMax.toStringAsFixed(0)} cm.",
+      );
+      return;
+    }
+
+    // Validate weight: must be a number between _weightMin and _weightMax g.
+    if (weightNum == null || weightNum < _weightMin || weightNum > _weightMax) {
+      _showErrorSnackbar(
+        "Ang timbang ay dapat numerong nasa pagitan ng ${_weightMin.toStringAsFixed(1)} at ${_weightMax.toStringAsFixed(0)} g.",
+      );
+      return;
+    }
+
     setState(() => _isSavingUlang = true);
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-      final sizeNum = double.tryParse(sizeController.text.trim()) ?? 0;
-      final weightNum = double.tryParse(weightController.text.trim()) ?? 0;
 
       await FirebaseFirestore.instance.collection('logs').add({
         'title': 'Ulang Log',
-        'description': 'Laki: ${sizeController.text.trim()}cm • Timbang: ${weightController.text.trim()}g',
+        'description': 'Laki: ${sizeText}cm • Timbang: ${weightText}g',
         'type': 'ulang',
         'createdAt': FieldValue.serverTimestamp(),
         'createdBy': uid,
-        'size': sizeController.text.trim(),
-        'weight': weightController.text.trim(),
+        'size': sizeText,
+        'weight': weightText,
         'observedAt': Timestamp.fromDate(selectedDate),
       });
 
@@ -196,31 +239,57 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
 
   Future<void> _savePlantLog() async {
     if (_isSavingPlant) return;
-    if (selectedPlantName == null ||
-        plantHeightController.text.trim().isEmpty ||
-        plantConditionController.text.trim().isEmpty ||
-        selectedPlantStage == null) return;
+
+    // Plant name must be chosen from the predefined options.
+    if (selectedPlantName == null || !_plantNames.contains(selectedPlantName)) {
+      _showErrorSnackbar("Pumili ng pangalan ng tanim.");
+      return;
+    }
+
+    // Height must be a valid number between _heightMin and _heightMax cm.
+    final heightText = plantHeightController.text.trim();
+    final heightNum = double.tryParse(heightText);
+    if (heightNum == null || heightNum < _heightMin || heightNum > _heightMax) {
+      _showErrorSnackbar(
+        "Ang taas ay dapat numerong nasa pagitan ng ${_heightMin.toStringAsFixed(0)} at ${_heightMax.toStringAsFixed(0)} cm.",
+      );
+      return;
+    }
+
+    // Stage must be chosen from the predefined options.
+    if (selectedPlantStage == null || !_plantStages.contains(selectedPlantStage)) {
+      _showErrorSnackbar("Pumili ng yugto ng paglaki.");
+      return;
+    }
+
+    // Condition must be chosen from the predefined options.
+    if (selectedPlantCondition == null ||
+        !_plantConditions.contains(selectedPlantCondition)) {
+      _showErrorSnackbar("Pumili ng kondisyon ng tanim.");
+      return;
+    }
+
     setState(() => _isSavingPlant = true);
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
       await FirebaseFirestore.instance.collection('logs').add({
         'title': selectedPlantName!,
         'description':
-            'Taas: ${plantHeightController.text.trim()}cm • Yugto: $selectedPlantStage • Kondisyon: ${plantConditionController.text.trim()}',
+            'Taas: ${heightText}cm • Yugto: $selectedPlantStage • Kondisyon: $selectedPlantCondition',
         'type': 'plant',
         'createdAt': FieldValue.serverTimestamp(),
         'createdBy': uid,
         'plantName': selectedPlantName,
-        'height': plantHeightController.text.trim(),
-        'condition': plantConditionController.text.trim(),
+        'height': heightText,
+        'condition': selectedPlantCondition,
         'stage': selectedPlantStage,
         'observedAt': Timestamp.fromDate(plantDate),
       });
       plantHeightController.clear();
-      plantConditionController.clear();
       setState(() {
         selectedPlantName = null;
         selectedPlantStage = null;
+        selectedPlantCondition = null;
       });
       _showSuccessSnackbar("Matagumpay na na-save ang tala ng Tanim.");
     } finally {
@@ -298,6 +367,26 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
           ],
         ),
         backgroundColor: tealDark,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
+  }
+
+  void _showErrorSnackbar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.error_outline, color: Colors.white),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(message, style: GoogleFonts.poppins(fontWeight: FontWeight.w500)),
+            ),
+          ],
+        ),
+        backgroundColor: const Color(0xFFDC2626),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         margin: const EdgeInsets.all(16),
@@ -677,7 +766,18 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
           const SizedBox(height: 16),
           _buildInputField(plantHeightController, "Taas (cm)", keyboardType: TextInputType.number),
           const SizedBox(height: 16),
-          _buildInputField(plantConditionController, "Kondisyon (hal. Malusog, Dilaw)"),
+          _buildCustomDropdown(
+            value: selectedPlantCondition,
+            hint: "Pumili ng kondisyon",
+            label: "Kondisyon",
+            items: const [
+              DropdownMenuItem(value: 'Malusog', child: Text('Malusog (Healthy)')),
+              DropdownMenuItem(value: 'Dilaw', child: Text('Dilaw (Yellowing)')),
+              DropdownMenuItem(value: 'Nalalanta', child: Text('Nalalanta (Wilting)')),
+              DropdownMenuItem(value: 'May Peste', child: Text('May Peste/Sakit')),
+            ],
+            onChanged: (value) => setState(() => selectedPlantCondition = value),
+          ),
           const SizedBox(height: 16),
           _buildCustomDropdown(
             value: selectedPlantStage,
