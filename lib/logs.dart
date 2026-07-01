@@ -81,8 +81,10 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
   }
 
   void _subscribeLogs() {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
     _logsSub = FirebaseFirestore.instance
         .collection('logs')
+        .where('createdBy', isEqualTo: uid)
         .orderBy('createdAt', descending: true)
         .snapshots()
         .listen(

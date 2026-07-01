@@ -121,6 +121,17 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
         return;
       }
 
+      final status = doc.data()?['status'] ?? 'pending';
+      if (status != 'active') {
+        await FirebaseAuth.instance.signOut();
+        if (!mounted) return;
+        setState(() {
+          errorMessage = 'Your account is pending admin approval. Please wait.';
+          _isLoading = false;
+        });
+        return;
+      }
+
       if (!mounted) return;
 
       Navigator.pushReplacementNamed(context, '/dashboard');
@@ -149,6 +160,15 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
         confirmPasswordController.text.isEmpty) {
       setState(() {
         errorMessage = 'Please fill in all fields.';
+        _isLoading = false;
+      });
+      return;
+    }
+
+    final emailRegex = RegExp(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$');
+    if (!emailRegex.hasMatch(emailController.text.trim())) {
+      setState(() {
+        errorMessage = 'Please enter a valid email address.';
         _isLoading = false;
       });
       return;
@@ -183,7 +203,7 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
         'email': emailController.text.trim(),
         'fullName': nameController.text.trim(),
         'role': 'user',
-        'status': 'active',
+        'status': 'pending',
         'createdAt': FieldValue.serverTimestamp(),
       });
 
@@ -192,7 +212,7 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
       setState(() {
         isSignIn = true;
         _isLoading = false;
-        errorMessage = 'Account created! Please sign in.';
+        errorMessage = 'Your account is pending admin approval. Please wait.';
       });
       _clearForm();
     } on FirebaseAuthException catch (e) {
