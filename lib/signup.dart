@@ -24,6 +24,7 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
   bool isConfirmPasswordVisible = false;
   bool rememberMe = false;
   bool _isLoading = false;
+  bool _showResendOption = false;
   String errorMessage = '';
 
   late AnimationController _fadeController;
@@ -84,6 +85,7 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
   Future<void> _handleSignIn() async {
     setState(() {
       errorMessage = '';
+      _showResendOption = false;
       _isLoading = true;
     });
 
@@ -121,6 +123,28 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
         return;
       }
 
+      // Gate 1: email must be verified before the existing approval gate runs.
+      await credential.user!.reload();
+      final refreshedUser = FirebaseAuth.instance.currentUser;
+      if (refreshedUser == null || !refreshedUser.emailVerified) {
+        await FirebaseAuth.instance.signOut();
+        if (!mounted) return;
+        setState(() {
+          errorMessage = 'Pakiverify muna ang iyong email bago mag-log in. '
+              'Tingnan ang iyong inbox para sa verification link.';
+          _showResendOption = true;
+          _isLoading = false;
+        });
+        return;
+      }
+      if (doc.data()?['emailVerified'] != true) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(credential.user!.uid)
+            .update({'emailVerified': true});
+      }
+
+      // Gate 2 (unchanged): existing admin-approval status check.
       final status = doc.data()?['status'] ?? 'pending';
       if (status != 'active') {
         await FirebaseAuth.instance.signOut();
@@ -151,6 +175,7 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
   Future<void> _handleSignUp() async {
     setState(() {
       errorMessage = '';
+      _showResendOption = false;
       _isLoading = true;
     });
 
@@ -196,6 +221,8 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
         password: passwordController.text,
       );
 
+      await credential.user!.sendEmailVerification();
+
       await FirebaseFirestore.instance
           .collection('users')
           .doc(credential.user!.uid)
@@ -204,6 +231,7 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
         'fullName': nameController.text.trim(),
         'role': 'user',
         'status': 'pending',
+        'emailVerified': false,
         'createdAt': FieldValue.serverTimestamp(),
       });
 
@@ -212,7 +240,9 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
       setState(() {
         isSignIn = true;
         _isLoading = false;
-        errorMessage = 'Your account is pending admin approval. Please wait.';
+        errorMessage = 'Account created! Please check your email and verify '
+            'your address before logging in. Your account will also need '
+            'admin approval.';
       });
       _clearForm();
     } on FirebaseAuthException catch (e) {
@@ -223,6 +253,41 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
     } catch (_) {
       setState(() {
         errorMessage = 'An error occurred. Please try again.';
+        _isLoading = false;
+      });
+    }
+  }
+
+  // Relies on emailController/passwordController still holding the values
+  // from the failed sign-in attempt (they're only cleared on successful
+  // signup, not on login errors). If the app is refreshed or the fields are
+  // cleared before tapping resend, this will fail — acceptable edge case for
+  // now since there's no stored credential to fall back on otherwise.
+  Future<void> _handleResendVerification() async {
+    setState(() {
+      _isLoading = true;
+    });
+    try {
+      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: emailController.text.trim(),
+        password: passwordController.text,
+      );
+      await credential.user!.sendEmailVerification();
+      await FirebaseAuth.instance.signOut();
+      if (!mounted) return;
+      setState(() {
+        errorMessage =
+            'Naipadala ulit ang verification email. Pakitingnan ang iyong inbox.';
+        _isLoading = false;
+      });
+    } on FirebaseAuthException catch (e) {
+      setState(() {
+        errorMessage = _authErrorMessage(e.code);
+        _isLoading = false;
+      });
+    } catch (_) {
+      setState(() {
+        errorMessage = 'Hindi maipadala ang verification email. Subukan ulit.';
         _isLoading = false;
       });
     }
@@ -452,14 +517,35 @@ class _SignupPageState extends State<SignupPage> with TickerProviderStateMixin {
                                       color: const Color(0xFFFECACA),
                                     ),
                                   ),
-                                  child: Text(
-                                    errorMessage,
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 13,
-                                      color: const Color(0xFFDC2626),
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                    textAlign: TextAlign.center,
+                                  child: Column(
+                                    children: [
+                                      Text(
+                                        errorMessage,
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 13,
+                                          color: const Color(0xFFDC2626),
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                      if (_showResendOption) ...[
+                                        const SizedBox(height: 8),
+                                        GestureDetector(
+                                          onTap: _isLoading
+                                              ? null
+                                              : _handleResendVerification,
+                                          child: Text(
+                                            'Resend verification email',
+                                            style: GoogleFonts.poppins(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w700,
+                                              color: teal,
+                                              decoration: TextDecoration.underline,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
                                   ),
                                 ),
                               ],

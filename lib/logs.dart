@@ -37,6 +37,10 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
   final weightController = TextEditingController();
   DateTime selectedDate = DateTime.now();
 
+  // Mortality form controller (separate submit section from the weight form)
+  final mortalityController = TextEditingController();
+  bool _isSavingMortality = false;
+
   // Plant form controllers
   final plantHeightController = TextEditingController();
   String? selectedPlantStage;
@@ -129,20 +133,14 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
     );
   }
 
+  // Current-cycle week number: week 1 = [cycleStart, cycleStart+7d), etc.
+  // Shared boundary definition for both weight averaging and mortality logging.
+  int _weekNumberFor(DateTime date, DateTime cycleStart) {
+    return (date.difference(cycleStart).inDays ~/ 7) + 1;
+  }
+
   Future<void> _recalculateAndUpdateGrowthIndicators() async {
     try {
-      final recordsSnap = await FirebaseFirestore.instance
-          .collection('ulang_growth_records')
-          .get();
-
-      if (recordsSnap.docs.isEmpty) return;
-
-      double totalWeight = 0;
-      for (final doc in recordsSnap.docs) {
-        totalWeight += (doc.data()['weight'] as num?)?.toDouble() ?? 0;
-      }
-      final avgWeight = totalWeight / recordsSnap.docs.length;
-
       final indicatorsSnap = await FirebaseFirestore.instance
           .collection('growth_indicators')
           .orderBy('timestamp', descending: true)
@@ -154,15 +152,71 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
       final indicatorDoc = indicatorsSnap.docs.first;
       final data = indicatorDoc.data() as Map<String, dynamic>;
       final initialStock = (data['initialStock'] as num?)?.toDouble() ?? 0;
-      final survivalRate = (data['survivalRate'] as num?)?.toDouble() ?? 0;
+      final cycleStartTs = data['cycleStart'] as Timestamp?;
 
-      final updates = <String, dynamic>{'avgWeightPerPiece': avgWeight};
-      if (initialStock > 0 && survivalRate > 0) {
-        updates['expectedYield'] =
-            initialStock * (survivalRate / 100) * (avgWeight / 1000);
+      // No cycle start set — weight averaging and survival rate both depend on
+      // it, so skip entirely rather than falling back to stale/global data.
+      if (cycleStartTs == null) return;
+      final cycleStart = cycleStartTs.toDate();
+
+      final updates = <String, dynamic>{};
+
+      // ---- avgWeightPerPiece: most recent 7-day cycle-week that has records ----
+      final recordsSnap = await FirebaseFirestore.instance
+          .collection('ulang_growth_records')
+          .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(cycleStart))
+          .get();
+
+      double? avgWeight;
+      if (recordsSnap.docs.isNotEmpty) {
+        final now = DateTime.now();
+        final currentWeek = _weekNumberFor(now, cycleStart);
+        for (int week = currentWeek; week >= 1; week--) {
+          final weekDocs = recordsSnap.docs.where((doc) {
+            final ts = (doc.data() as Map<String, dynamic>)['createdAt'] as Timestamp?;
+            if (ts == null) return false;
+            return _weekNumberFor(ts.toDate(), cycleStart) == week;
+          }).toList();
+          if (weekDocs.isNotEmpty) {
+            double totalWeight = 0;
+            for (final doc in weekDocs) {
+              totalWeight += ((doc.data() as Map<String, dynamic>)['weight'] as num?)?.toDouble() ?? 0;
+            }
+            avgWeight = totalWeight / weekDocs.length;
+            break;
+          }
+        }
+      }
+      if (avgWeight != null) {
+        updates['avgWeightPerPiece'] = avgWeight;
       }
 
-      await indicatorDoc.reference.update(updates);
+      // ---- survivalRate: initialStock minus cumulative logged deaths this cycle ----
+      final mortalitySnap = await FirebaseFirestore.instance
+          .collection('mortality_records')
+          .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(cycleStart))
+          .get();
+      int totalDeaths = 0;
+      for (final doc in mortalitySnap.docs) {
+        totalDeaths += ((doc.data()['deathCount'] as num?)?.toInt() ?? 0);
+      }
+      double? survivalRate;
+      if (initialStock > 0) {
+        survivalRate = (((initialStock - totalDeaths) / initialStock) * 100).clamp(0, 100);
+        updates['survivalRate'] = survivalRate;
+      }
+
+      // ---- expectedYield: recomputed from whichever values are current ----
+      final effectiveAvgWeight = avgWeight ?? (data['avgWeightPerPiece'] as num?)?.toDouble() ?? 0;
+      final effectiveSurvival = survivalRate ?? (data['survivalRate'] as num?)?.toDouble() ?? 0;
+      if (initialStock > 0 && effectiveSurvival > 0) {
+        updates['expectedYield'] =
+            initialStock * (effectiveSurvival / 100) * (effectiveAvgWeight / 1000);
+      }
+
+      if (updates.isNotEmpty) {
+        await indicatorDoc.reference.update(updates);
+      }
     } catch (e) {
       debugPrint('Failed to recalculate growth indicators: $e');
     }
@@ -175,6 +229,7 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
     _fadeController.dispose();
     sizeController.dispose();
     weightController.dispose();
+    mortalityController.dispose();
     plantHeightController.dispose();
     super.dispose();
   }
@@ -236,6 +291,66 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
       _showSuccessSnackbar("Matagumpay na na-save ang tala ng Ulang.");
     } finally {
       if (mounted) setState(() => _isSavingUlang = false);
+    }
+  }
+
+  Future<void> _saveMortalityLog() async {
+    if (_isSavingMortality) return;
+
+    final deathText = mortalityController.text.trim();
+    final deathCount = int.tryParse(deathText);
+    if (deathCount == null || deathCount < 0) {
+      _showErrorSnackbar("Ang bilang ng namatay ay dapat isang buong numero (0 pataas).");
+      return;
+    }
+
+    setState(() => _isSavingMortality = true);
+    try {
+      final indicatorsSnap = await FirebaseFirestore.instance
+          .collection('growth_indicators')
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .get();
+
+      if (indicatorsSnap.docs.isEmpty) {
+        _showErrorSnackbar("Itakda muna ang petsa ng simula ng cycle sa Settings.");
+        return;
+      }
+      final data = indicatorsSnap.docs.first.data() as Map<String, dynamic>;
+      final cycleStartTs = data['cycleStart'] as Timestamp?;
+      if (cycleStartTs == null) {
+        _showErrorSnackbar("Itakda muna ang petsa ng simula ng cycle sa Settings.");
+        return;
+      }
+      final cycleStart = cycleStartTs.toDate();
+      final weekNumber = _weekNumberFor(DateTime.now(), cycleStart);
+
+      final existingSnap = await FirebaseFirestore.instance
+          .collection('mortality_records')
+          .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(cycleStart))
+          .get();
+      final alreadyLogged = existingSnap.docs.any(
+        (doc) => (doc.data()['weekNumber'] as num?)?.toInt() == weekNumber,
+      );
+      if (alreadyLogged) {
+        _showErrorSnackbar("May naitala na para sa linggong ito. Hintayin ang susunod na linggo.");
+        return;
+      }
+
+      final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+      await FirebaseFirestore.instance.collection('mortality_records').add({
+        'deathCount': deathCount,
+        'weekNumber': weekNumber,
+        'recordedBy': uid,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      await _recalculateAndUpdateGrowthIndicators();
+
+      mortalityController.clear();
+      _showSuccessSnackbar("Matagumpay na na-save ang tala ng namatay.");
+    } finally {
+      if (mounted) setState(() => _isSavingMortality = false);
     }
   }
 
@@ -506,6 +621,11 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
           _buildUlangForm(),
           const SizedBox(height: 24),
 
+          _buildSectionTitle("Lingguhang Mortality"),
+          const SizedBox(height: 12),
+          _buildMortalityForm(),
+          const SizedBox(height: 24),
+
           if (_ulangLogs.isNotEmpty) ...[
             _buildSectionTitle("Mga Nakaraang Tala"),
             const SizedBox(height: 12),
@@ -723,6 +843,31 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
           _buildSaveButton(
             _isSavingUlang ? "Sine-save..." : "I-save ang Ulang Log",
             _isSavingUlang ? null : () => _saveUlangLog(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMortalityForm() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey.withOpacity(0.2)),
+      ),
+      child: Column(
+        children: [
+          _buildInputField(
+            mortalityController,
+            "Ilang namatay ngayong linggo?",
+            keyboardType: TextInputType.number,
+          ),
+          const SizedBox(height: 20),
+          _buildSaveButton(
+            _isSavingMortality ? "Sine-save..." : "I-save ang Mortality Log",
+            _isSavingMortality ? null : () => _saveMortalityLog(),
           ),
         ],
       ),
