@@ -349,6 +349,16 @@ class _LogsPageState extends State<LogsPage> with SingleTickerProviderStateMixin
 
       mortalityController.clear();
       _showSuccessSnackbar("Matagumpay na na-save ang tala ng namatay.");
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
+      _showErrorSnackbar(
+        e.code == 'permission-denied'
+            ? "Walang pahintulot na i-save ang mortality log. Kontakin ang admin."
+            : "Hindi na-save ang mortality log: ${e.message ?? e.code}",
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _showErrorSnackbar("Hindi na-save ang mortality log. Subukan muli.");
     } finally {
       if (mounted) setState(() => _isSavingMortality = false);
     }
