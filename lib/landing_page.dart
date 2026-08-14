@@ -8,6 +8,7 @@ import 'tasks.dart';
 import 'yield.dart';
 import 'logs.dart';
 import 'profile.dart';
+import 'notification_service.dart';
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
@@ -53,6 +54,7 @@ class _DashboardPageState extends State<DashboardPage>
   // Firestore subscriptions
   StreamSubscription<QuerySnapshot>? _sensorSub;
   StreamSubscription<QuerySnapshot>? _alertsSub;
+  bool _hasLoadedInitialAlerts = false;
 
   @override
   void initState() {
@@ -98,6 +100,26 @@ class _DashboardPageState extends State<DashboardPage>
         .listen(
       (snapshot) {
         if (!mounted) return;
+        if (_hasLoadedInitialAlerts) {
+          for (final change in snapshot.docChanges) {
+            if (change.type != DocumentChangeType.added) continue;
+            final alert = change.doc.data() as Map<String, dynamic>;
+            final title = (alert['title'] as String?) ?? 'Bagong Abiso';
+            final message = (alert['message'] as String?) ?? '';
+            final priority =
+                ((alert['priority'] as String?) ?? '').toUpperCase();
+            unawaited(
+              NotificationService.instance.showAlert(
+                id: change.doc.id,
+                title: title,
+                message: message,
+                isUrgent: priority == 'HIGH' || priority == 'URGENT',
+              ),
+            );
+          }
+        } else {
+          _hasLoadedInitialAlerts = true;
+        }
         setState(() {
           _activeAlerts = snapshot.docs.map((doc) {
             return {'id': doc.id, ...doc.data() as Map<String, dynamic>};
