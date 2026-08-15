@@ -47,6 +47,8 @@ class _DashboardPageState extends State<DashboardPage>
 
   // Live data from alerts
   List<Map<String, dynamic>> _activeAlerts = [];
+  List<Map<String, dynamic>> _pendingTasks = [];
+  Set<String> _seenNotificationKeys = <String>{};
 
   // Profile
   String _initials = '?';
@@ -54,7 +56,7 @@ class _DashboardPageState extends State<DashboardPage>
   // Firestore subscriptions
   StreamSubscription<QuerySnapshot>? _sensorSub;
   StreamSubscription<QuerySnapshot>? _alertsSub;
-  bool _hasLoadedInitialAlerts = false;
+  StreamSubscription<QuerySnapshot>? _tasksSub;
 
   @override
   void initState() {
@@ -63,8 +65,11 @@ class _DashboardPageState extends State<DashboardPage>
       duration: const Duration(milliseconds: 600),
       vsync: this,
     )..forward();
+    _seenNotificationKeys =
+        NotificationService.instance.getSeenNotificationKeys();
     _subscribeSensorReadings();
     _subscribeAlerts();
+    _subscribeTasks();
     _loadUserInitials();
   }
 
@@ -100,25 +105,29 @@ class _DashboardPageState extends State<DashboardPage>
         .listen(
       (snapshot) {
         if (!mounted) return;
-        if (_hasLoadedInitialAlerts) {
-          for (final change in snapshot.docChanges) {
-            if (change.type != DocumentChangeType.added) continue;
-            final alert = change.doc.data() as Map<String, dynamic>;
-            final title = (alert['title'] as String?) ?? 'Bagong Abiso';
-            final message = (alert['message'] as String?) ?? '';
-            final priority =
-                ((alert['priority'] as String?) ?? '').toUpperCase();
+        for (final change in snapshot.docChanges) {
+          if (change.type == DocumentChangeType.removed) {
+            _seenNotificationKeys.remove('alert:${change.doc.id}');
             unawaited(
-              NotificationService.instance.showAlert(
-                id: change.doc.id,
-                title: title,
-                message: message,
-                isUrgent: priority == 'HIGH' || priority == 'URGENT',
-              ),
+              NotificationService.instance
+                  .resolveNotification('alert:${change.doc.id}'),
             );
+            continue;
           }
-        } else {
-          _hasLoadedInitialAlerts = true;
+          if (change.type != DocumentChangeType.added) continue;
+          final alert = change.doc.data() as Map<String, dynamic>;
+          final title = (alert['title'] as String?) ?? 'Bagong Abiso';
+          final message = (alert['message'] as String?) ?? '';
+          final priority =
+              ((alert['priority'] as String?) ?? '').toUpperCase();
+          unawaited(
+            NotificationService.instance.showAlert(
+              id: change.doc.id,
+              title: title,
+              message: message,
+              isUrgent: priority == 'HIGH' || priority == 'URGENT',
+            ),
+          );
         }
         setState(() {
           _activeAlerts = snapshot.docs.map((doc) {
@@ -127,6 +136,32 @@ class _DashboardPageState extends State<DashboardPage>
         });
       },
       onError: (error) => debugPrint('Alerts subscription error: $error'),
+    );
+  }
+
+  void _subscribeTasks() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+
+    _tasksSub = FirebaseFirestore.instance
+        .collection('tasks')
+        .where('assignedTo', isEqualTo: uid)
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .listen(
+      (snapshot) {
+        if (!mounted) return;
+        setState(() {
+          _pendingTasks = snapshot.docs
+              .map((doc) => {
+                    'id': doc.id,
+                    ...doc.data() as Map<String, dynamic>,
+                  })
+              .where((task) => task['status'] == 'pending')
+              .toList();
+        });
+      },
+      onError: (error) => debugPrint('Tasks subscription error: $error'),
     );
   }
 
@@ -153,6 +188,7 @@ class _DashboardPageState extends State<DashboardPage>
     _fadeController.dispose();
     _sensorSub?.cancel();
     _alertsSub?.cancel();
+    _tasksSub?.cancel();
     super.dispose();
   }
 
@@ -220,6 +256,26 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   bool get _hasAlerts => _activeAlerts.isNotEmpty;
+  int get _notificationCount =>
+      _pendingTasks.length +
+      _activeAlerts.where((alert) {
+        return !_seenNotificationKeys.contains('alert:${alert['id']}');
+      }).length;
+  bool get _hasUnreadNotifications => _notificationCount > 0;
+
+  void _toggleNotificationDropdown() {
+    setState(() {
+      _showNotificationDropdown = !_showNotificationDropdown;
+    });
+  }
+
+  void _acknowledgeAlert(String id) {
+    final key = 'alert:$id';
+    if (_seenNotificationKeys.contains(key)) return;
+    setState(() => _seenNotificationKeys.add(key));
+    unawaited(NotificationService.instance.markNotificationsSeen([key]));
+    unawaited(NotificationService.instance.cancelNotification(key));
+  }
 
   String get _systemStatusTitle =>
       _hasAlerts ? 'May Babala' : 'Mabuti ang Kalagayan';
@@ -453,39 +509,56 @@ class _DashboardPageState extends State<DashboardPage>
                   ),
                 ),
 
-                // Bell icon — badge appears only when there are active alerts
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    IconButton(
-                      icon: Icon(
-                        Icons.notifications_none,
-                        color: textDark,
-                        size: 28,
-                      ),
-                      onPressed: () {
-                        setState(() {
-                          _showNotificationDropdown =
-                              !_showNotificationDropdown;
-                        });
-                      },
-                    ),
-                    if (_hasAlerts)
+                // Bell icon — badge includes water alerts and assigned tasks.
+                SizedBox(
+                  width: 52,
+                  height: 48,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
                       Positioned(
-                        top: 12,
-                        right: 12,
-                        child: Container(
-                          width: 10,
-                          height: 10,
-                          decoration: BoxDecoration(
-                            color: warningRed,
-                            shape: BoxShape.circle,
-                            border:
-                                Border.all(color: Colors.white, width: 2),
+                        left: 0,
+                        top: 0,
+                        child: IconButton(
+                          tooltip: 'Mga abiso at gawain',
+                          icon: Icon(
+                            Icons.notifications_none,
+                            color: textDark,
+                            size: 28,
                           ),
+                          onPressed: _toggleNotificationDropdown,
                         ),
                       ),
-                  ],
+                      if (_hasUnreadNotifications)
+                        Positioned(
+                          top: 3,
+                          right: 4,
+                          child: Container(
+                            constraints: const BoxConstraints(minWidth: 18),
+                            height: 18,
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            decoration: BoxDecoration(
+                              color: warningRed,
+                              borderRadius: BorderRadius.circular(10),
+                              border:
+                                  Border.all(color: Colors.white, width: 2),
+                            ),
+                            child: Center(
+                              child: Text(
+                                _notificationCount > 9
+                                    ? '9+'
+                                    : '$_notificationCount',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
 
                 // Profile Avatar
@@ -614,7 +687,17 @@ class _DashboardPageState extends State<DashboardPage>
   // ── NOTIFICATION DROPDOWN ──────────────────────────────────────────────
 
   Widget _buildNotificationDropdown() {
-    final displayed = _activeAlerts.take(5).toList();
+    final combined = <Map<String, dynamic>>[
+      ..._activeAlerts.map((alert) => {...alert, '_kind': 'alert'}),
+      ..._pendingTasks.map((task) => {...task, '_kind': 'task'}),
+    ];
+    combined.sort((a, b) {
+      final aTs = a['createdAt'] as Timestamp?;
+      final bTs = b['createdAt'] as Timestamp?;
+      return (bTs?.millisecondsSinceEpoch ?? 0)
+          .compareTo(aTs?.millisecondsSinceEpoch ?? 0);
+    });
+    final displayed = combined;
 
     return Material(
       elevation: 8,
@@ -632,7 +715,7 @@ class _DashboardPageState extends State<DashboardPage>
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              "Mga Abiso",
+              "Mga Abiso at Gawain",
               style: GoogleFonts.poppins(
                 fontSize: 15,
                 fontWeight: FontWeight.w700,
@@ -642,29 +725,57 @@ class _DashboardPageState extends State<DashboardPage>
             const SizedBox(height: 12),
             if (displayed.isEmpty)
               Text(
-                "Walang aktibong abiso.",
+                "Walang bagong abiso o nakatalagang gawain.",
                 style: GoogleFonts.poppins(fontSize: 13, color: textMuted),
               )
             else
-              ...List.generate(displayed.length, (i) {
-                final alert = displayed[i];
-                final String title = (alert['title'] as String?) ?? 'Abiso';
-                final String message = (alert['message'] as String?) ?? '';
-                final String prio =
-                    ((alert['priority'] as String?) ?? '').toUpperCase();
-                final bool isHigh = prio == 'HIGH' || prio == 'URGENT';
-                return Column(
-                  children: [
-                    _buildNotifItem(
-                      isHigh ? Icons.assignment_late : Icons.water_drop,
-                      title,
-                      message,
-                      isHigh ? warningRed : teal,
-                    ),
-                    if (i < displayed.length - 1) const Divider(height: 16),
-                  ],
-                );
-              }),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 320),
+                child: Scrollbar(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    padding: EdgeInsets.zero,
+                    itemCount: displayed.length,
+                    separatorBuilder: (_, __) => const Divider(height: 16),
+                    itemBuilder: (context, i) {
+                      final alert = displayed[i];
+                      final String title =
+                          (alert['title'] as String?) ?? 'Abiso';
+                      final bool isTask = alert['_kind'] == 'task';
+                      final String message = isTask
+                          ? ((alert['description'] as String?) ??
+                              'May bagong nakatalagang gawain.')
+                          : ((alert['message'] as String?) ?? '');
+                      final String prio =
+                          ((alert['priority'] as String?) ?? '').toUpperCase();
+                      final bool isHigh =
+                          prio == 'HIGH' || prio == 'URGENT';
+                      return InkWell(
+                        onTap: isTask
+                            ? () {
+                                setState(
+                                  () => _showNotificationDropdown = false,
+                                );
+                                _onNavTapped(1);
+                              }
+                            : () => _acknowledgeAlert(alert['id'] as String),
+                        child: _buildNotifItem(
+                          isTask
+                              ? Icons.assignment_outlined
+                              : (isHigh
+                                  ? Icons.assignment_late
+                                  : Icons.water_drop),
+                          title,
+                          message,
+                          isTask
+                              ? const Color(0xFF0369A1)
+                              : (isHigh ? warningRed : teal),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
           ],
         ),
       ),

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'notification_service.dart';
 // logs import removed — task cards no longer navigate to LogsPage;
 
 class TasksPage extends StatefulWidget {
@@ -25,6 +26,7 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
   StreamSubscription<QuerySnapshot>? _tasksSub;
 
   List<QueryDocumentSnapshot> _tasks = [];
+  final Set<String> _notifiedTaskIds = <String>{};
   bool _isLoading = true;
   String? _errorMessage;
 
@@ -48,6 +50,27 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
         .listen(
       (snapshot) {
         if (!mounted) return;
+        for (final change in snapshot.docChanges) {
+          final data = change.doc.data() as Map<String, dynamic>;
+          if ((data['status'] as String?) != 'pending') {
+            unawaited(
+              NotificationService.instance
+                  .resolveNotification('task:${change.doc.id}'),
+            );
+            continue;
+          }
+          if (change.type != DocumentChangeType.added ||
+              !_notifiedTaskIds.add(change.doc.id)) {
+            continue;
+          }
+          unawaited(
+            NotificationService.instance.showTask(
+              id: change.doc.id,
+              title: (data['title'] as String?) ?? 'Nakatalagang Gawain',
+              description: (data['description'] as String?) ?? '',
+            ),
+          );
+        }
         setState(() {
           _isLoading = false;
           _errorMessage = null;
@@ -94,127 +117,6 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
     }
   }
 
-  Future<void> _showAddTaskDialog() async {
-    final titleCtrl = TextEditingController();
-    final descCtrl = TextEditingController();
-    bool saving = false;
-
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Text(
-            "Bagong Gawain",
-            style: GoogleFonts.poppins(fontWeight: FontWeight.w700, color: textDark),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: titleCtrl,
-                textCapitalization: TextCapitalization.sentences,
-                decoration: InputDecoration(
-                  labelText: 'Pamagat *',
-                  labelStyle: GoogleFonts.poppins(fontSize: 14),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide(color: teal, width: 2),
-                  ),
-                ),
-                style: GoogleFonts.poppins(fontSize: 14),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: descCtrl,
-                textCapitalization: TextCapitalization.sentences,
-                maxLines: 3,
-                decoration: InputDecoration(
-                  labelText: 'Paglalarawan',
-                  labelStyle: GoogleFonts.poppins(fontSize: 14),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide(color: teal, width: 2),
-                  ),
-                ),
-                style: GoogleFonts.poppins(fontSize: 14),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: saving ? null : () => Navigator.pop(ctx),
-              child: Text(
-                "Ikansela",
-                style: GoogleFonts.poppins(color: textMuted, fontWeight: FontWeight.w600),
-              ),
-            ),
-            ElevatedButton(
-              onPressed: saving
-                  ? null
-                  : () async {
-                      if (titleCtrl.text.trim().isEmpty) return;
-                      setDialogState(() => saving = true);
-                      final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-                      try {
-                        await FirebaseFirestore.instance.collection('tasks').add({
-                          'title': titleCtrl.text.trim(),
-                          'description': descCtrl.text.trim(),
-                          'status': 'pending',
-                          'createdAt': FieldValue.serverTimestamp(),
-                          'assignedTo': uid,
-                        });
-                        if (ctx.mounted) Navigator.pop(ctx);
-                      } catch (e) {
-                        debugPrint('Failed to add task: $e');
-                        setDialogState(() => saving = false);
-                        if (ctx.mounted) {
-                          ScaffoldMessenger.of(ctx).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                'Hindi ma-save ang gawain. Subukan muli.',
-                                style: GoogleFonts.poppins(),
-                              ),
-                              backgroundColor: const Color(0xFFDC2626),
-                              behavior: SnackBarBehavior.floating,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                              margin: const EdgeInsets.all(16),
-                            ),
-                          );
-                        }
-                      }
-                    },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: teal,
-                elevation: 0,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-              child: saving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                    )
-                  : Text(
-                      "I-save",
-                      style: GoogleFonts.poppins(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    titleCtrl.dispose();
-    descCtrl.dispose();
-  }
-
   Color _statusColor(String status) {
     switch (status) {
       case 'pending':
@@ -259,15 +161,6 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF3F4F6),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showAddTaskDialog,
-        backgroundColor: tealDark,
-        icon: const Icon(Icons.add, color: Colors.white),
-        label: Text(
-          "Bagong Gawain",
-          style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600),
-        ),
-      ),
       body: FadeTransition(
         opacity: Tween<double>(begin: 0, end: 1).animate(
           CurvedAnimation(parent: _fadeController, curve: Curves.easeIn),
