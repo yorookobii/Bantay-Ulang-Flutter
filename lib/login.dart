@@ -1,5 +1,6 @@
+import 'package:demo_1_langto/signup.dart';
 import 'package:flutter/material.dart';
-import 'signup.dart';
+
 class LoginPage extends StatelessWidget {
   const LoginPage({super.key});
 
@@ -7,21 +8,10 @@ class LoginPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       body: Stack(
+        fit: StackFit.expand,
         children: [
-          Image.asset('assets/images/3.png'),
-          SizedBox.expand(
-            child: Image.asset(
-              'assets/img/3.png', // Make sure this exists in pubspec.yaml
-              fit: BoxFit.cover,
-            ),
-          ),
-
-          // Dark Overlay
-          Container(
-            color: Colors.black.withOpacity(0.35),
-          ),
-
-          // Content
+          Image.asset('assets/img/3.png', fit: BoxFit.cover),
+          Container(color: Colors.black.withValues(alpha: 0.35)),
           SafeArea(
             child: Center(
               child: Padding(
@@ -68,8 +58,6 @@ class LoginPage extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 24),
-
-                    // Get Started Button
                     ElevatedButton(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.white,
@@ -84,9 +72,7 @@ class LoginPage extends StatelessWidget {
                       onPressed: () {
                         Navigator.push(
                           context,
-                          MaterialPageRoute(
-                            builder: (context) => const SignupPage(),
-                          ),
+                          MaterialPageRoute(builder: (_) => const SignupPage()),
                         );
                       },
                       child: const Text(

@@ -4,14 +4,20 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class YieldEstimationPage extends StatefulWidget {
-  final void Function(double expectedYield, String shrimpHealth, String plantHealth)? onGrowthData;
+  final void Function(
+    double expectedYield,
+    String shrimpHealth,
+    String plantHealth,
+  )?
+  onGrowthData;
   const YieldEstimationPage({super.key, this.onGrowthData});
 
   @override
   State<YieldEstimationPage> createState() => _YieldEstimationPageState();
 }
 
-class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTickerProviderStateMixin {
+class _YieldEstimationPageState extends State<YieldEstimationPage>
+    with SingleTickerProviderStateMixin {
   // High-Contrast Aquatic Palette
   final Color tealLight = const Color(0xFFE6FFF9);
   final Color teal = const Color(0xFF0D9488);
@@ -63,38 +69,41 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
         .limit(1)
         .snapshots()
         .listen(
-      (snapshot) {
-        if (!mounted) return;
-        if (snapshot.docs.isEmpty) {
-          setState(() => _isLoading = false);
-          return;
-        }
-        final data = snapshot.docs.first.data() as Map<String, dynamic>;
-        final expectedYield = (data['expectedYield'] as num?)?.toDouble() ?? 0;
-        final shrimpHealth = (data['shrimpHealth'] as String?) ?? 'Malusog';
-        final plantHealth = (data['plantHealth'] as String?) ?? 'Maayos';
-        setState(() {
-          _isLoading = false;
-          _errorMessage = null;
-          _expectedYield = expectedYield;
-          _avgWeightPerPiece = (data['avgWeightPerPiece'] as num?)?.toDouble() ?? 0;
-          _cycleStart = (data['cycleStart'] as Timestamp?)?.toDate();
-          _cycleEnd = (data['cycleEnd'] as Timestamp?)?.toDate();
-          _targetHarvestDate = (data['targetHarvestDate'] as Timestamp?)?.toDate();
-          _survivalRate = (data['survivalRate'] as num?)?.toDouble() ?? 0;
-          _summaryNote = (data['summaryNote'] as String?) ?? '';
-        });
-        widget.onGrowthData?.call(expectedYield, shrimpHealth, plantHealth);
-      },
-      onError: (error) {
-        debugPrint('Growth indicators subscription error: $error');
-        if (!mounted) return;
-        setState(() {
-          _isLoading = false;
-          _errorMessage = 'Hindi ma-load ang datos ng ani. Subukan muli.';
-        });
-      },
-    );
+          (snapshot) {
+            if (!mounted) return;
+            if (snapshot.docs.isEmpty) {
+              setState(() => _isLoading = false);
+              return;
+            }
+            final data = snapshot.docs.first.data() as Map<String, dynamic>;
+            final expectedYield =
+                (data['expectedYield'] as num?)?.toDouble() ?? 0;
+            final shrimpHealth = (data['shrimpHealth'] as String?) ?? 'Malusog';
+            final plantHealth = (data['plantHealth'] as String?) ?? 'Maayos';
+            setState(() {
+              _isLoading = false;
+              _errorMessage = null;
+              _expectedYield = expectedYield;
+              _avgWeightPerPiece =
+                  (data['avgWeightPerPiece'] as num?)?.toDouble() ?? 0;
+              _cycleStart = (data['cycleStart'] as Timestamp?)?.toDate();
+              _cycleEnd = (data['cycleEnd'] as Timestamp?)?.toDate();
+              _targetHarvestDate = (data['targetHarvestDate'] as Timestamp?)
+                  ?.toDate();
+              _survivalRate = (data['survivalRate'] as num?)?.toDouble() ?? 0;
+              _summaryNote = (data['summaryNote'] as String?) ?? '';
+            });
+            widget.onGrowthData?.call(expectedYield, shrimpHealth, plantHealth);
+          },
+          onError: (error) {
+            debugPrint('Growth indicators subscription error: $error');
+            if (!mounted) return;
+            setState(() {
+              _isLoading = false;
+              _errorMessage = 'Unable to load yield data. Please try again.';
+            });
+          },
+        );
   }
 
   @override
@@ -117,7 +126,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                "Awtomatikong ina-update ang datos sa real-time.",
+                "Data is automatically updated in real time.",
                 style: GoogleFonts.poppins(),
               ),
             ),
@@ -133,7 +142,20 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
 
   String _fmtDate(DateTime? d) {
     if (d == null) return '—';
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
     return '${months[d.month - 1]} ${d.day}, ${d.year}';
   }
 
@@ -148,40 +170,54 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
         child: _isLoading
             ? Center(child: CircularProgressIndicator(color: teal))
             : _errorMessage != null
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(32),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.cloud_off_rounded, size: 56, color: textMuted),
-                          const SizedBox(height: 16),
-                          Text(
-                            _errorMessage!,
-                            textAlign: TextAlign.center,
-                            style: GoogleFonts.poppins(fontSize: 15, color: textMuted, fontWeight: FontWeight.w500),
-                          ),
-                          const SizedBox(height: 20),
-                          ElevatedButton.icon(
-                            onPressed: () {
-                              _growthSub?.cancel();
-                              setState(() { _isLoading = true; _errorMessage = null; });
-                              _subscribeGrowthIndicators();
-                            },
-                            icon: const Icon(Icons.refresh_rounded),
-                            label: Text("Subukan Muli", style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: teal,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                              elevation: 0,
-                            ),
-                          ),
-                        ],
+            ? Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.cloud_off_rounded, size: 56, color: textMuted),
+                      const SizedBox(height: 16),
+                      Text(
+                        _errorMessage!,
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.poppins(
+                          fontSize: 15,
+                          color: textMuted,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
-                    ),
-                  )
-                : RefreshIndicator(
+                      const SizedBox(height: 20),
+                      ElevatedButton.icon(
+                        onPressed: () {
+                          _growthSub?.cancel();
+                          setState(() {
+                            _isLoading = true;
+                            _errorMessage = null;
+                          });
+                          _subscribeGrowthIndicators();
+                        },
+                        icon: const Icon(Icons.refresh_rounded),
+                        label: Text(
+                          "Try Again",
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: teal,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          elevation: 0,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            : RefreshIndicator(
                 onRefresh: _recalculateYield,
                 color: teal,
                 child: SingleChildScrollView(
@@ -198,7 +234,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  "Inaasahang Ani at Kita",
+                                  "Expected Yield and Income",
                                   style: GoogleFonts.poppins(
                                     fontSize: 26,
                                     fontWeight: FontWeight.w700,
@@ -208,7 +244,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                                 ),
                                 const SizedBox(height: 6),
                                 Text(
-                                  "Pagtatantiya ng ani at kikitain base sa iyong mga tala at presyo sa merkado.",
+                                  "Estimated harvest and income based on your records and current market prices.",
                                   style: GoogleFonts.poppins(
                                     fontSize: 14,
                                     color: textMuted,
@@ -219,11 +255,24 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                             ),
                           ),
                           IconButton(
-                            onPressed: _isRecalculating ? null : _recalculateYield,
+                            onPressed: _isRecalculating
+                                ? null
+                                : _recalculateYield,
                             icon: _isRecalculating
-                                ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: teal, strokeWidth: 2))
-                                : Icon(Icons.refresh, color: tealDark, size: 28),
-                            tooltip: 'I-update ang data',
+                                ? SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      color: teal,
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : Icon(
+                                    Icons.refresh,
+                                    color: tealDark,
+                                    size: 28,
+                                  ),
+                            tooltip: 'Refresh data',
                           ),
                         ],
                       ),
@@ -234,18 +283,18 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                       const SizedBox(height: 20),
 
                       // Progress Card
-                      _buildSectionTitle(Icons.timelapse, "Siklo ng Paglaki (Cycle)"),
+                      _buildSectionTitle(Icons.timelapse, "Growth Cycle"),
                       const SizedBox(height: 12),
                       _buildCycleProgressCard(),
                       const SizedBox(height: 24),
 
                       // Calculation Factors
-                      _buildSectionTitle(Icons.calculate, "Mga Salik ng Pagtatantiya"),
+                      _buildSectionTitle(Icons.calculate, "Estimation Factors"),
                       const SizedBox(height: 12),
                       Row(
                         children: [
                           _buildFactorCard(
-                            "Avg. Timbang",
+                            "Average Weight",
                             _avgWeightPerPiece > 0
                                 ? "${_avgWeightPerPiece.toStringAsFixed(1)}g"
                                 : "—",
@@ -253,7 +302,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                           ),
                           const SizedBox(width: 12),
                           _buildFactorCard(
-                            "Buhay (Survival)",
+                            "Survival Rate",
                             _survivalRate > 0
                                 ? "${_survivalRate.toStringAsFixed(0)}%"
                                 : "—",
@@ -265,7 +314,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
 
                       // Market Price Factor taking full width for emphasis
                       _buildFactorCard(
-                        "Presyo sa Merkado (Min–Max)",
+                        "Market Price Range (Min–Max)",
                         "₱${_priceMin.toStringAsFixed(0)}–₱${_priceMax.toStringAsFixed(0)} / kg",
                         Icons.storefront,
                         isFullWidth: true,
@@ -273,7 +322,10 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                       const SizedBox(height: 24),
 
                       // Recommendation Section
-                      _buildSectionTitle(Icons.lightbulb, "Status at Rekomendasyon"),
+                      _buildSectionTitle(
+                        Icons.lightbulb,
+                        "Status and Recommendations",
+                      ),
                       const SizedBox(height: 12),
                       _buildRecommendationCard(),
                     ],
@@ -334,7 +386,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      "Kabuuang Inaasahang Ani",
+                      "Total Expected Yield",
                       style: GoogleFonts.poppins(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
@@ -342,7 +394,10 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                       ),
                     ),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.white.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(20),
@@ -361,7 +416,9 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  _expectedYield > 0 ? "${_expectedYield.toStringAsFixed(0)} kg" : "— kg",
+                  _expectedYield > 0
+                      ? "${_expectedYield.toStringAsFixed(0)} kg"
+                      : "— kg",
                   style: GoogleFonts.poppins(
                     fontSize: 42,
                     fontWeight: FontWeight.w800,
@@ -384,10 +441,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
           ),
 
           // Divider
-          Container(
-            height: 1,
-            color: Colors.white.withOpacity(0.2),
-          ),
+          Container(height: 1, color: Colors.white.withOpacity(0.2)),
 
           // Revenue Section
           Container(
@@ -410,11 +464,15 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                         color: Colors.white.withOpacity(0.2),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(Icons.payments, color: Colors.white, size: 18),
+                      child: const Icon(
+                        Icons.payments,
+                        color: Colors.white,
+                        size: 18,
+                      ),
                     ),
                     const SizedBox(width: 10),
                     Text(
-                      "Inaasahang Kita (Gross Revenue)",
+                      "Expected Income (Gross Revenue)",
                       style: GoogleFonts.poppins(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
@@ -427,16 +485,32 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    _buildIncomeColumn("Min", _incomeMin, Colors.white.withOpacity(0.75)),
-                    Container(width: 1, height: 40, color: Colors.white.withOpacity(0.2)),
+                    _buildIncomeColumn(
+                      "Min",
+                      _incomeMin,
+                      Colors.white.withOpacity(0.75),
+                    ),
+                    Container(
+                      width: 1,
+                      height: 40,
+                      color: Colors.white.withOpacity(0.2),
+                    ),
                     _buildIncomeColumn("Avg", _incomeAvg, Colors.white),
-                    Container(width: 1, height: 40, color: Colors.white.withOpacity(0.2)),
-                    _buildIncomeColumn("Max", _incomeMax, Colors.white.withOpacity(0.75)),
+                    Container(
+                      width: 1,
+                      height: 40,
+                      color: Colors.white.withOpacity(0.2),
+                    ),
+                    _buildIncomeColumn(
+                      "Max",
+                      _incomeMax,
+                      Colors.white.withOpacity(0.75),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  "Batay sa presyo na ₱${_priceMin.toStringAsFixed(0)}–₱${_priceMax.toStringAsFixed(0)} / kg sa merkado",
+                  "Based on the market price of ₱${_priceMin.toStringAsFixed(0)}–₱${_priceMax.toStringAsFixed(0)} per kg",
                   style: GoogleFonts.poppins(
                     fontSize: 11,
                     color: Colors.white.withOpacity(0.65),
@@ -480,7 +554,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                "Araw $currentDay ng $totalDays",
+                "Day $currentDay of $totalDays",
                 style: GoogleFonts.poppins(
                   fontSize: 16,
                   fontWeight: FontWeight.w700,
@@ -526,7 +600,12 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
     );
   }
 
-  Widget _buildFactorCard(String label, String value, IconData icon, {bool isFullWidth = false}) {
+  Widget _buildFactorCard(
+    String label,
+    String value,
+    IconData icon, {
+    bool isFullWidth = false,
+  }) {
     Widget cardContent = Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -557,7 +636,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                     fontWeight: FontWeight.w500,
                   ),
                 ),
-              ]
+              ],
             ],
           ),
           const SizedBox(height: 12),
@@ -579,7 +658,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
                 fontWeight: FontWeight.w500,
               ),
             ),
-          ]
+          ],
         ],
       ),
     );
@@ -623,7 +702,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
   Widget _buildRecommendationCard() {
     final note = _summaryNote.isNotEmpty
         ? _summaryNote
-        : "Normal ang takbo ng paglaki. Panatilihin ang regular na pagpapakain upang maabot o mahigitan pa ang tinatayang ₱${_formatIncome(_incomeAvg)} na kita (average).";
+        : "Growth is progressing normally. Maintain regular feeding to reach or exceed the estimated average income of ₱${_formatIncome(_incomeAvg)}.";
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -649,7 +728,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage> with SingleTi
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  "Nasa Tamang Direksyon",
+                  "On Track",
                   style: GoogleFonts.poppins(
                     fontSize: 15,
                     fontWeight: FontWeight.w700,
