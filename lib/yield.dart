@@ -34,8 +34,8 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
   bool _isRecalculating = false;
 
   // Firestore-backed fields
-  double _expectedYield = 0;
-  double _avgWeightPerPiece = 0;
+  double? _rfProjectedYield;
+  double? _rfProjectedWeight;
   DateTime? _cycleStart;
   DateTime? _cycleEnd;
   DateTime? _targetHarvestDate;
@@ -43,14 +43,61 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
   String _summaryNote = '';
   String? _errorMessage;
 
-  // Market price range (min/avg/max per kg)
-  static const double _priceMin = 250.0;
-  static const double _priceAvg = 425.0;
-  static const double _priceMax = 600.0;
+  // RF batch-inference metadata (written by ml-analytics/predict_yield.py)
+  String? _rfMode;
+  String _rfNote = '';
+  int? _rfReadingsUsed;
+  DateTime? _rfUpdatedAt;
 
-  double get _incomeMin => _expectedYield * _priceMin;
-  double get _incomeAvg => _expectedYield * _priceAvg;
-  double get _incomeMax => _expectedYield * _priceMax;
+  // Panelist requirement: yield prediction only after 90 days of real
+  // cultivation data — mirrors RF_GATE_DAYS in web/yieldPrediction.js.
+  static const int _rfGateDays = 90;
+  bool _eligible = false;
+  int? _weeksRemaining;
+
+  bool get _rfAvailable =>
+      _eligible && _rfProjectedYield != null && _rfProjectedYield! > 0;
+
+  static const Map<String, String> _rfModeLabels = {
+    'hybrid': 'RF Prediction — Hybrid',
+    'real': 'RF Prediction — Real',
+    'test': 'RF Prediction — Test',
+  };
+
+  String get _yieldBadgeText {
+    if (_rfAvailable) return _rfModeLabels[_rfMode] ?? 'RF Prediction';
+    if (!_eligible) return 'Pending';
+    return 'Processing';
+  }
+
+  String get _yieldBigText {
+    if (_rfAvailable) return '${_rfProjectedYield!.toStringAsFixed(0)} kg';
+    if (!_eligible) return 'Pending';
+    return 'Prediction being processed';
+  }
+
+  String get _yieldSubText {
+    if (_rfAvailable) return 'Random Forest projection from live sensor data';
+    if (!_eligible) {
+      return _weeksRemaining != null
+          ? 'Prediction available in $_weeksRemaining week${_weeksRemaining == 1 ? '' : 's'}'
+          : 'Prediction pending — cycle start date not set';
+    }
+    return "The RF model hasn't produced a prediction for this cycle yet";
+  }
+
+  // Market price range (min/avg/max per kg) — BFAR National Consolidated
+  // Price Monitoring Report 2025, matches web/yieldPrediction.js rates.
+  static const double _priceMin = 150.0;
+  static const double _priceAvg = 300.0;
+  static const double _priceMax = 450.0;
+
+  double? get _incomeMin =>
+      _rfAvailable ? _rfProjectedYield! * _priceMin : null;
+  double? get _incomeAvg =>
+      _rfAvailable ? _rfProjectedYield! * _priceAvg : null;
+  double? get _incomeMax =>
+      _rfAvailable ? _rfProjectedYield! * _priceMax : null;
 
   @override
   void initState() {
@@ -76,24 +123,51 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
               return;
             }
             final data = snapshot.docs.first.data() as Map<String, dynamic>;
-            final expectedYield =
-                (data['expectedYield'] as num?)?.toDouble() ?? 0;
+            final rfProjectedYield =
+                (data['rfProjectedYield'] as num?)?.toDouble();
             final shrimpHealth = (data['shrimpHealth'] as String?) ?? 'Malusog';
             final plantHealth = (data['plantHealth'] as String?) ?? 'Maayos';
+
+            // 90-day gate — fractional days, matching web's
+            // (Date.now() - cycleStart) / msPerDay (not whole-day truncation),
+            // so the eligibility boundary lands on the same moment as the web.
+            final cycleStart = (data['cycleStart'] as Timestamp?)?.toDate();
+            bool eligible = false;
+            int? weeksRemaining;
+            if (cycleStart != null) {
+              final daysSince =
+                  DateTime.now().difference(cycleStart).inMilliseconds /
+                  86400000;
+              eligible = daysSince >= _rfGateDays;
+              weeksRemaining = eligible
+                  ? null
+                  : ((_rfGateDays - daysSince) / 7).ceil();
+            }
+
             setState(() {
               _isLoading = false;
               _errorMessage = null;
-              _expectedYield = expectedYield;
-              _avgWeightPerPiece =
-                  (data['avgWeightPerPiece'] as num?)?.toDouble() ?? 0;
-              _cycleStart = (data['cycleStart'] as Timestamp?)?.toDate();
+              _rfProjectedYield = rfProjectedYield;
+              _rfProjectedWeight =
+                  (data['rfProjectedWeight'] as num?)?.toDouble();
+              _rfMode = data['rfMode'] as String?;
+              _rfNote = (data['rfNote'] as String?) ?? '';
+              _rfReadingsUsed = (data['rfReadingsUsed'] as num?)?.toInt();
+              _rfUpdatedAt = (data['rfUpdatedAt'] as Timestamp?)?.toDate();
+              _cycleStart = cycleStart;
               _cycleEnd = (data['cycleEnd'] as Timestamp?)?.toDate();
               _targetHarvestDate = (data['targetHarvestDate'] as Timestamp?)
                   ?.toDate();
               _survivalRate = (data['survivalRate'] as num?)?.toDouble() ?? 0;
               _summaryNote = (data['summaryNote'] as String?) ?? '';
+              _eligible = eligible;
+              _weeksRemaining = weeksRemaining;
             });
-            widget.onGrowthData?.call(expectedYield, shrimpHealth, plantHealth);
+            widget.onGrowthData?.call(
+              _rfAvailable ? _rfProjectedYield! : 0,
+              shrimpHealth,
+              plantHealth,
+            );
           },
           onError: (error) {
             debugPrint('Growth indicators subscription error: $error');
@@ -295,8 +369,9 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
                         children: [
                           _buildFactorCard(
                             "Average Weight",
-                            _avgWeightPerPiece > 0
-                                ? "${_avgWeightPerPiece.toStringAsFixed(1)}g"
+                            (_rfProjectedWeight != null &&
+                                    _rfProjectedWeight! > 0)
+                                ? "${_rfProjectedWeight!.toStringAsFixed(1)}g"
                                 : "—",
                             Icons.scale,
                           ),
@@ -403,7 +478,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
-                        "ESTIMATE",
+                        _yieldBadgeText,
                         style: GoogleFonts.poppins(
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
@@ -416,9 +491,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  _expectedYield > 0
-                      ? "${_expectedYield.toStringAsFixed(0)} kg"
-                      : "— kg",
+                  _yieldBigText,
                   style: GoogleFonts.poppins(
                     fontSize: 42,
                     fontWeight: FontWeight.w800,
@@ -428,6 +501,15 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
                   ),
                 ),
                 const SizedBox(height: 8),
+                Text(
+                  _yieldSubText,
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    color: Colors.white.withOpacity(0.85),
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+                const SizedBox(height: 4),
                 Text(
                   "Target Harvest: ${_fmtDate(_targetHarvestDate)}",
                   style: GoogleFonts.poppins(
@@ -665,7 +747,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
     return isFullWidth ? cardContent : Expanded(child: cardContent);
   }
 
-  Widget _buildIncomeColumn(String label, double amount, Color valueColor) {
+  Widget _buildIncomeColumn(String label, double? amount, Color valueColor) {
     return Expanded(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -681,7 +763,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
           ),
           const SizedBox(height: 4),
           Text(
-            _expectedYield > 0 ? "₱${_formatIncome(amount)}" : "—",
+            amount != null ? "₱${_formatIncome(amount)}" : "₱--",
             style: GoogleFonts.poppins(
               fontSize: 16,
               fontWeight: FontWeight.w700,
@@ -702,7 +784,9 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
   Widget _buildRecommendationCard() {
     final note = _summaryNote.isNotEmpty
         ? _summaryNote
-        : "Growth is progressing normally. Maintain regular feeding to reach or exceed the estimated average income of ₱${_formatIncome(_incomeAvg)}.";
+        : (_incomeAvg != null
+              ? "Growth is progressing normally. Maintain regular feeding to reach or exceed the estimated average income of ₱${_formatIncome(_incomeAvg!)}."
+              : "Growth is progressing normally. Maintain regular feeding until the yield prediction becomes available.");
 
     return Container(
       padding: const EdgeInsets.all(16),
