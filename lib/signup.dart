@@ -148,7 +148,7 @@ class _SignupPageState extends State<SignupPage>
         return;
       }
       if (!mounted) return;
-      Navigator.pushNamedAndRemoveUntil(context, '/dashboard', (_) => false);
+      Navigator.pushReplacementNamed(context, '/dashboard');
     } on FirebaseAuthException catch (error) {
       _setMessage(_authErrorMessage(error.code), AuthMessageKind.error);
     } catch (_) {

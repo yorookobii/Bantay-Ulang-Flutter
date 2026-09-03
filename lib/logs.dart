@@ -30,15 +30,19 @@ class _LogsPageState extends State<LogsPage>
   String? _errorMessage;
   bool _isSavingUlang = false;
   bool _isSavingPlant = false;
+  
   List<QueryDocumentSnapshot> _ulangGrowthRecords = [];
   StreamSubscription<QuerySnapshot>? _growthRecordsSub;
+
+  // New mortality records state
+  List<QueryDocumentSnapshot> _mortalityRecords = [];
+  StreamSubscription<QuerySnapshot>? _mortalityRecordsSub;
 
   // Ulang form controllers
   final sizeController = TextEditingController();
   final weightController = TextEditingController();
-  DateTime selectedDate = DateTime.now();
 
-  // Mortality form controller (separate submit section from the weight form)
+  // Mortality form controller
   final mortalityController = TextEditingController();
   bool _isSavingMortality = false;
 
@@ -47,10 +51,9 @@ class _LogsPageState extends State<LogsPage>
   String? selectedPlantStage;
   String? selectedPlantName;
   String? selectedPlantCondition;
-  DateTime plantDate = DateTime.now();
 
-  // Predefined options (validation must match these)
-  static const List<String> _plantNames = ['Mint', 'Oregano', 'Kangkong'];
+  // Predefined options (validation must match these) - Kangkong removed
+  static const List<String> _plantNames = ['Mint', 'Oregano'];
   static const List<String> _plantStages = [
     'Seedling',
     'Vegetative',
@@ -83,6 +86,7 @@ class _LogsPageState extends State<LogsPage>
     )..forward();
     _subscribeLogs();
     _subscribeGrowthRecords();
+    _subscribeMortalityRecords();
   }
 
   void _subscribeLogs() {
@@ -133,8 +137,21 @@ class _LogsPageState extends State<LogsPage>
         );
   }
 
-  // Current-cycle week number: week 1 = [cycleStart, cycleStart+7d), etc.
-  // Shared boundary definition for both weight averaging and mortality logging.
+  void _subscribeMortalityRecords() {
+    _mortalityRecordsSub = FirebaseFirestore.instance
+        .collection('mortality_records')
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .listen(
+          (snapshot) {
+            if (!mounted) return;
+            setState(() => _mortalityRecords = snapshot.docs);
+          },
+          onError: (error) =>
+              debugPrint('Mortality records subscription error: $error'),
+        );
+  }
+
   int _weekNumberFor(DateTime date, DateTime cycleStart) {
     return (date.difference(cycleStart).inDays ~/ 7) + 1;
   }
@@ -154,14 +171,11 @@ class _LogsPageState extends State<LogsPage>
       final initialStock = (data['initialStock'] as num?)?.toDouble() ?? 0;
       final cycleStartTs = data['cycleStart'] as Timestamp?;
 
-      // No cycle start set — weight averaging and survival rate both depend on
-      // it, so skip entirely rather than falling back to stale/global data.
       if (cycleStartTs == null) return;
       final cycleStart = cycleStartTs.toDate();
 
       final updates = <String, dynamic>{};
 
-      // ---- avgWeightPerPiece: most recent 7-day cycle-week that has records ----
       final recordsSnap = await FirebaseFirestore.instance
           .collection('ulang_growth_records')
           .where(
@@ -198,7 +212,6 @@ class _LogsPageState extends State<LogsPage>
         updates['avgWeightPerPiece'] = avgWeight;
       }
 
-      // ---- survivalRate: initialStock minus cumulative logged deaths this cycle ----
       final mortalitySnap = await FirebaseFirestore.instance
           .collection('mortality_records')
           .where(
@@ -217,7 +230,6 @@ class _LogsPageState extends State<LogsPage>
         updates['survivalRate'] = survivalRate;
       }
 
-      // ---- expectedYield: recomputed from whichever values are current ----
       final effectiveAvgWeight =
           avgWeight ?? (data['avgWeightPerPiece'] as num?)?.toDouble() ?? 0;
       final effectiveSurvival =
@@ -241,6 +253,7 @@ class _LogsPageState extends State<LogsPage>
   void dispose() {
     _logsSub?.cancel();
     _growthRecordsSub?.cancel();
+    _mortalityRecordsSub?.cancel();
     _fadeController.dispose();
     sizeController.dispose();
     weightController.dispose();
@@ -258,10 +271,16 @@ class _LogsPageState extends State<LogsPage>
 
     final sizeText = sizeController.text.trim();
     final weightText = weightController.text.trim();
+
+    // Check for empty inputs before proceeding
+    if (sizeText.isEmpty || weightText.isEmpty) {
+      _showErrorSnackbar("May mga patlang na walang laman. Punan bago magpatuloy.");
+      return;
+    }
+
     final sizeNum = double.tryParse(sizeText);
     final weightNum = double.tryParse(weightText);
 
-    // Validate size: must be a number between _sizeMin and _sizeMax cm.
     if (sizeNum == null || sizeNum < _sizeMin || sizeNum > _sizeMax) {
       _showErrorSnackbar(
         "Ang laki ay dapat numerong nasa pagitan ng ${_sizeMin.toStringAsFixed(1)} at ${_sizeMax.toStringAsFixed(0)} cm.",
@@ -269,7 +288,6 @@ class _LogsPageState extends State<LogsPage>
       return;
     }
 
-    // Validate weight: must be a number between _weightMin and _weightMax g.
     if (weightNum == null || weightNum < _weightMin || weightNum > _weightMax) {
       _showErrorSnackbar(
         "Ang timbang ay dapat numerong nasa pagitan ng ${_weightMin.toStringAsFixed(1)} at ${_weightMax.toStringAsFixed(0)} g.",
@@ -280,6 +298,8 @@ class _LogsPageState extends State<LogsPage>
     setState(() => _isSavingUlang = true);
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+      final logger = await _currentLoggerIdentity();
+      final observedAt = Timestamp.fromDate(DateTime.now());
 
       await FirebaseFirestore.instance.collection('logs').add({
         'title': 'Ulang Log',
@@ -287,9 +307,11 @@ class _LogsPageState extends State<LogsPage>
         'type': 'ulang',
         'createdAt': FieldValue.serverTimestamp(),
         'createdBy': uid,
+        'createdByName': logger.name,
+        'createdByEmail': logger.email,
         'size': sizeText,
         'weight': weightText,
-        'observedAt': Timestamp.fromDate(selectedDate),
+        'observedAt': observedAt,
       });
 
       await FirebaseFirestore.instance.collection('ulang_growth_records').add({
@@ -297,7 +319,7 @@ class _LogsPageState extends State<LogsPage>
         'weight': weightNum,
         'recordedBy': uid,
         'createdAt': FieldValue.serverTimestamp(),
-        'observedAt': Timestamp.fromDate(selectedDate),
+        'observedAt': observedAt,
       });
 
       await _recalculateAndUpdateGrowthIndicators();
@@ -314,6 +336,13 @@ class _LogsPageState extends State<LogsPage>
     if (_isSavingMortality) return;
 
     final deathText = mortalityController.text.trim();
+
+    // Check for empty inputs before proceeding
+    if (deathText.isEmpty) {
+      _showErrorSnackbar("May mga patlang na walang laman. Punan bago magpatuloy.");
+      return;
+    }
+
     final deathCount = int.tryParse(deathText);
     if (deathCount == null || deathCount < 0) {
       _showErrorSnackbar(
@@ -394,14 +423,22 @@ class _LogsPageState extends State<LogsPage>
   Future<void> _savePlantLog() async {
     if (_isSavingPlant) return;
 
-    // Plant name must be chosen from the predefined options.
-    if (selectedPlantName == null || !_plantNames.contains(selectedPlantName)) {
-      _showErrorSnackbar("Pumili ng pangalan ng tanim.");
+    final heightText = plantHeightController.text.trim();
+
+    // Check for empty inputs before proceeding
+    if (selectedPlantName == null || 
+        heightText.isEmpty || 
+        selectedPlantStage == null || 
+        selectedPlantCondition == null) {
+      _showErrorSnackbar("May mga patlang na walang laman. Punan bago magpatuloy.");
       return;
     }
 
-    // Height must be a valid number between _heightMin and _heightMax cm.
-    final heightText = plantHeightController.text.trim();
+    if (!_plantNames.contains(selectedPlantName)) {
+      _showErrorSnackbar("Pumili ng wastong pangalan ng tanim.");
+      return;
+    }
+
     final heightNum = double.tryParse(heightText);
     if (heightNum == null || heightNum < _heightMin || heightNum > _heightMax) {
       _showErrorSnackbar(
@@ -410,23 +447,20 @@ class _LogsPageState extends State<LogsPage>
       return;
     }
 
-    // Stage must be chosen from the predefined options.
-    if (selectedPlantStage == null ||
-        !_plantStages.contains(selectedPlantStage)) {
-      _showErrorSnackbar("Pumili ng yugto ng paglaki.");
+    if (!_plantStages.contains(selectedPlantStage)) {
+      _showErrorSnackbar("Pumili ng wastong yugto ng paglaki.");
       return;
     }
 
-    // Condition must be chosen from the predefined options.
-    if (selectedPlantCondition == null ||
-        !_plantConditions.contains(selectedPlantCondition)) {
-      _showErrorSnackbar("Pumili ng kondisyon ng tanim.");
+    if (!_plantConditions.contains(selectedPlantCondition)) {
+      _showErrorSnackbar("Pumili ng wastong kondisyon ng tanim.");
       return;
     }
 
     setState(() => _isSavingPlant = true);
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+      final logger = await _currentLoggerIdentity();
       await FirebaseFirestore.instance.collection('logs').add({
         'title': selectedPlantName!,
         'description':
@@ -434,11 +468,13 @@ class _LogsPageState extends State<LogsPage>
         'type': 'plant',
         'createdAt': FieldValue.serverTimestamp(),
         'createdBy': uid,
+        'createdByName': logger.name,
+        'createdByEmail': logger.email,
         'plantName': selectedPlantName,
         'height': heightText,
         'condition': selectedPlantCondition,
         'stage': selectedPlantStage,
-        'observedAt': Timestamp.fromDate(plantDate),
+        'observedAt': Timestamp.fromDate(DateTime.now()),
       });
       plantHeightController.clear();
       setState(() {
@@ -456,8 +492,38 @@ class _LogsPageState extends State<LogsPage>
   // Logic Helpers
   // =======================
 
-  double parseWeight(String weight) {
-    return double.tryParse(weight.replaceAll(RegExp(r'[^\d.]'), '')) ?? 0;
+  Future<({String name, String email})> _currentLoggerIdentity() async {
+    final user = FirebaseAuth.instance.currentUser;
+    var name = user?.displayName?.trim() ?? '';
+    var email = user?.email?.trim() ?? '';
+
+    if (user != null) {
+      try {
+        final profile = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+        final data = profile.data();
+        name = (data?['fullName'] as String?)?.trim() ?? name;
+        email = (data?['email'] as String?)?.trim() ?? email;
+      } catch (error) {
+        debugPrint('Could not load logger profile: $error');
+      }
+    }
+
+    return (name: name, email: email);
+  }
+
+  String _loggerLabel(Map<String, dynamic> data) {
+    final name = (data['createdByName'] as String?)?.trim() ?? '';
+    final email = (data['createdByEmail'] as String?)?.trim() ?? '';
+    final uid = (data['createdBy'] as String?)?.trim() ?? '';
+
+    if (name.isNotEmpty && email.isNotEmpty) return '$name ($email)';
+    if (name.isNotEmpty) return name;
+    if (email.isNotEmpty) return email;
+    if (uid.isNotEmpty) return uid;
+    return 'Hindi matukoy';
   }
 
   List<Map<String, dynamic>> getWeeklyWeightData() {
@@ -494,70 +560,20 @@ class _LogsPageState extends State<LogsPage>
 
   String _formatShortDate(DateTime date) {
     const months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
     ];
     return '${months[date.month - 1]} ${date.day}, ${date.year}';
   }
 
   String _formatDateRange(DateTime start, DateTime end) {
     const months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
     ];
     if (start.year == end.year && start.month == end.month) {
       return '${months[start.month - 1]} ${start.day}-${end.day}';
     }
     return '${months[start.month - 1]} ${start.day} - '
         '${months[end.month - 1]} ${end.day}';
-  }
-
-  Future<void> _selectDate(BuildContext context, bool isUlang) async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: isUlang ? selectedDate : plantDate,
-      firstDate: DateTime(2023),
-      lastDate: DateTime.now(),
-      builder: (context, child) => Theme(
-        data: Theme.of(context).copyWith(
-          colorScheme: ColorScheme.light(
-            primary: teal,
-            onPrimary: Colors.white,
-            onSurface: textDark,
-          ),
-        ),
-        child: child!,
-      ),
-    );
-    if (picked != null) {
-      setState(() {
-        if (isUlang) {
-          selectedDate = picked;
-        } else {
-          plantDate = picked;
-        }
-      });
-    }
   }
 
   void _showSuccessSnackbar(String message) {
@@ -742,8 +758,15 @@ class _LogsPageState extends State<LogsPage>
           _buildMortalityForm(),
           const SizedBox(height: 24),
 
+          if (_mortalityRecords.isNotEmpty) ...[
+            _buildSectionTitle("Mga Nakaraang Tala ng Mortality"),
+            const SizedBox(height: 12),
+            ..._mortalityRecords.map(_buildMortalityLogCard),
+            const SizedBox(height: 24),
+          ],
+
           if (_ulangLogs.isNotEmpty) ...[
-            _buildSectionTitle("Mga Nakaraang Tala"),
+            _buildSectionTitle("Mga Nakaraang Tala ng Ulang"),
             const SizedBox(height: 12),
             ..._ulangLogs.map(_buildUlangLogCard),
           ],
@@ -1043,31 +1066,6 @@ class _LogsPageState extends State<LogsPage>
       ),
       child: Column(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                "Petsa: ${selectedDate.month}/${selectedDate.day}/${selectedDate.year}",
-                style: GoogleFonts.poppins(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500,
-                  color: textDark,
-                ),
-              ),
-              TextButton.icon(
-                onPressed: () => _selectDate(context, true),
-                icon: Icon(Icons.calendar_month, color: teal, size: 20),
-                label: Text(
-                  "Palitan",
-                  style: GoogleFonts.poppins(
-                    color: teal,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
           _buildInputField(
             sizeController,
             "Laki (cm)",
@@ -1124,31 +1122,6 @@ class _LogsPageState extends State<LogsPage>
       ),
       child: Column(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                "Petsa: ${plantDate.month}/${plantDate.day}/${plantDate.year}",
-                style: GoogleFonts.poppins(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500,
-                  color: textDark,
-                ),
-              ),
-              TextButton.icon(
-                onPressed: () => _selectDate(context, false),
-                icon: Icon(Icons.calendar_month, color: teal, size: 20),
-                label: Text(
-                  "Palitan",
-                  style: GoogleFonts.poppins(
-                    color: teal,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
           _buildCustomDropdown(
             value: selectedPlantName,
             hint: "Pumili ng uri ng tanim",
@@ -1156,7 +1129,6 @@ class _LogsPageState extends State<LogsPage>
             items: const [
               DropdownMenuItem(value: 'Mint', child: Text('Mint')),
               DropdownMenuItem(value: 'Oregano', child: Text('Oregano')),
-              DropdownMenuItem(value: 'Kangkong', child: Text('Kangkong')),
             ],
             onChanged: (value) => setState(() => selectedPlantName = value),
           ),
@@ -1329,8 +1301,76 @@ class _LogsPageState extends State<LogsPage>
       dropdownColor: Colors.white,
     );
   }
+  
+  Widget _buildMortalityLogCard(QueryDocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+    final deathCount = data['deathCount'] ?? 0;
+    final weekNumber = data['weekNumber'] ?? '—';
+    final ts = data['createdAt'] as Timestamp?;
+    final date = ts?.toDate();
+    final formattedDate = date != null
+        ? '${date.month}/${date.day}/${date.year}'
+        : '—';
 
-  Widget _buildUlangLogCard(QueryDocumentSnapshot doc) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.red.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.warning_amber_rounded, color: Colors.red, size: 24),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Namatay: $deathCount',
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: textDark,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      formattedDate,
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        color: textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Linggo: $weekNumber',
+                  style: GoogleFonts.poppins(fontSize: 13, color: textMuted),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+Widget _buildUlangLogCard(QueryDocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
     final size = data['size'] ?? '—';
     final weight = data['weight'] ?? '—';
@@ -1339,6 +1379,10 @@ class _LogsPageState extends State<LogsPage>
     final formattedDate = date != null
         ? '${date.month}/${date.day}/${date.year}'
         : '—';
+        
+    // Extract only the name directly, completely ignoring the UID fallback
+    final name = (data['createdByName'] as String?)?.trim() ?? '';
+    final loggerName = name.isNotEmpty ? name : 'Hindi matukoy';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -1390,6 +1434,11 @@ class _LogsPageState extends State<LogsPage>
                   'Timbang: $weight g',
                   style: GoogleFonts.poppins(fontSize: 13, color: textMuted),
                 ),
+                const SizedBox(height: 4),
+                Text(
+                  'Nag-log: $loggerName', // Using the extracted name here
+                  style: GoogleFonts.poppins(fontSize: 12, color: textMuted),
+                ),
               ],
             ),
           ),
@@ -1398,7 +1447,7 @@ class _LogsPageState extends State<LogsPage>
     );
   }
 
-  Widget _buildPlantLogCard(QueryDocumentSnapshot doc) {
+Widget _buildPlantLogCard(QueryDocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
     final name = data['plantName'] ?? data['title'] ?? 'Tanim';
     final height = data['height'] ?? '—';
@@ -1409,6 +1458,10 @@ class _LogsPageState extends State<LogsPage>
     final formattedDate = date != null
         ? '${date.month}/${date.day}/${date.year}'
         : '—';
+        
+    // Extract only the name directly, completely ignoring the UID fallback
+    final createdByName = (data['createdByName'] as String?)?.trim() ?? '';
+    final loggerName = createdByName.isNotEmpty ? createdByName : 'Hindi matukoy';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -1467,6 +1520,11 @@ class _LogsPageState extends State<LogsPage>
                     style: GoogleFonts.poppins(fontSize: 13, color: textMuted),
                   ),
                 ],
+                const SizedBox(height: 4),
+                Text(
+                  'Nag-log: $loggerName', // Using the extracted name here
+                  style: GoogleFonts.poppins(fontSize: 12, color: textMuted),
+                ),
               ],
             ),
           ),

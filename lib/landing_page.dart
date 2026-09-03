@@ -28,8 +28,9 @@ class _DashboardPageState extends State<DashboardPage>
   final Color textMuted = const Color(0xFF6B7280);
 
   int _currentNavIndex = 0;
+  final List<int> _navHistory = [];
   bool _showNotificationDropdown = false;
-  bool _isNavBarVisible = true;
+  final ValueNotifier<bool> _isNavBarVisible = ValueNotifier(true);
   late AnimationController _fadeController;
 
   // Live data from sensor_readings
@@ -65,8 +66,8 @@ class _DashboardPageState extends State<DashboardPage>
       duration: const Duration(milliseconds: 600),
       vsync: this,
     )..forward();
-    _seenNotificationKeys =
-        NotificationService.instance.getSeenNotificationKeys();
+    _seenNotificationKeys = NotificationService.instance
+        .getSeenNotificationKeys();
     _subscribeSensorReadings();
     _subscribeAlerts();
     _subscribeTasks();
@@ -80,21 +81,22 @@ class _DashboardPageState extends State<DashboardPage>
         .limit(1)
         .snapshots()
         .listen(
-      (snapshot) {
-        if (!mounted) return;
-        if (snapshot.docs.isEmpty) return;
-        final data = snapshot.docs.first.data() as Map<String, dynamic>;
-        setState(() {
-          _waterTemp = (data['waterTemp'] as num?)?.toDouble();
-          _phLevel = (data['phLevel'] as num?)?.toDouble();
-          _dissolvedOxygen = (data['dissolvedOxygen'] as num?)?.toDouble();
-          _salinity = (data['salinity'] as num?)?.toDouble();
-          _turbidity = (data['turbidity'] as num?)?.toDouble();
-          _waterLevel = (data['waterLevel'] as num?)?.toDouble();
-        });
-      },
-      onError: (error) => debugPrint('Sensor readings subscription error: $error'),
-    );
+          (snapshot) {
+            if (!mounted) return;
+            if (snapshot.docs.isEmpty) return;
+            final data = snapshot.docs.first.data() as Map<String, dynamic>;
+            setState(() {
+              _waterTemp = (data['waterTemp'] as num?)?.toDouble();
+              _phLevel = (data['phLevel'] as num?)?.toDouble();
+              _dissolvedOxygen = (data['dissolvedOxygen'] as num?)?.toDouble();
+              _salinity = (data['salinity'] as num?)?.toDouble();
+              _turbidity = (data['turbidity'] as num?)?.toDouble();
+              _waterLevel = (data['waterLevel'] as num?)?.toDouble();
+            });
+          },
+          onError: (error) =>
+              debugPrint('Sensor readings subscription error: $error'),
+        );
   }
 
   void _subscribeAlerts() {
@@ -102,41 +104,39 @@ class _DashboardPageState extends State<DashboardPage>
         .collection('alerts')
         .where('status', isEqualTo: 'active')
         .snapshots()
-        .listen(
-      (snapshot) {
-        if (!mounted) return;
-        for (final change in snapshot.docChanges) {
-          if (change.type == DocumentChangeType.removed) {
-            _seenNotificationKeys.remove('alert:${change.doc.id}');
+        .listen((snapshot) {
+          if (!mounted) return;
+          for (final change in snapshot.docChanges) {
+            if (change.type == DocumentChangeType.removed) {
+              _seenNotificationKeys.remove('alert:${change.doc.id}');
+              unawaited(
+                NotificationService.instance.resolveNotification(
+                  'alert:${change.doc.id}',
+                ),
+              );
+              continue;
+            }
+            if (change.type != DocumentChangeType.added) continue;
+            final alert = change.doc.data() as Map<String, dynamic>;
+            final title = (alert['title'] as String?) ?? 'Bagong Abiso';
+            final message = (alert['message'] as String?) ?? '';
+            final priority = ((alert['priority'] as String?) ?? '')
+                .toUpperCase();
             unawaited(
-              NotificationService.instance
-                  .resolveNotification('alert:${change.doc.id}'),
+              NotificationService.instance.showAlert(
+                id: change.doc.id,
+                title: title,
+                message: message,
+                isUrgent: priority == 'HIGH' || priority == 'URGENT',
+              ),
             );
-            continue;
           }
-          if (change.type != DocumentChangeType.added) continue;
-          final alert = change.doc.data() as Map<String, dynamic>;
-          final title = (alert['title'] as String?) ?? 'Bagong Abiso';
-          final message = (alert['message'] as String?) ?? '';
-          final priority =
-              ((alert['priority'] as String?) ?? '').toUpperCase();
-          unawaited(
-            NotificationService.instance.showAlert(
-              id: change.doc.id,
-              title: title,
-              message: message,
-              isUrgent: priority == 'HIGH' || priority == 'URGENT',
-            ),
-          );
-        }
-        setState(() {
-          _activeAlerts = snapshot.docs.map((doc) {
-            return {'id': doc.id, ...doc.data() as Map<String, dynamic>};
-          }).toList();
-        });
-      },
-      onError: (error) => debugPrint('Alerts subscription error: $error'),
-    );
+          setState(() {
+            _activeAlerts = snapshot.docs.map((doc) {
+              return {'id': doc.id, ...doc.data() as Map<String, dynamic>};
+            }).toList();
+          });
+        }, onError: (error) => debugPrint('Alerts subscription error: $error'));
   }
 
   void _subscribeTasks() {
@@ -148,28 +148,30 @@ class _DashboardPageState extends State<DashboardPage>
         .where('assignedTo', isEqualTo: uid)
         .orderBy('createdAt', descending: true)
         .snapshots()
-        .listen(
-      (snapshot) {
-        if (!mounted) return;
-        setState(() {
-          _pendingTasks = snapshot.docs
-              .map((doc) => {
+        .listen((snapshot) {
+          if (!mounted) return;
+          setState(() {
+            _pendingTasks = snapshot.docs
+                .map(
+                  (doc) => {
                     'id': doc.id,
                     ...doc.data() as Map<String, dynamic>,
-                  })
-              .where((task) => task['status'] == 'pending')
-              .toList();
-        });
-      },
-      onError: (error) => debugPrint('Tasks subscription error: $error'),
-    );
+                  },
+                )
+                .where((task) => task['status'] == 'pending')
+                .toList();
+          });
+        }, onError: (error) => debugPrint('Tasks subscription error: $error'));
   }
 
   Future<void> _loadUserInitials() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
     try {
-      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
       if (!mounted) return;
       final fullName = (doc.data()?['fullName'] as String?) ?? '';
       if (fullName.isEmpty) return;
@@ -189,6 +191,7 @@ class _DashboardPageState extends State<DashboardPage>
     _sensorSub?.cancel();
     _alertsSub?.cancel();
     _tasksSub?.cancel();
+    _isNavBarVisible.dispose();
     super.dispose();
   }
 
@@ -203,8 +206,10 @@ class _DashboardPageState extends State<DashboardPage>
 
   String get _tempDescription {
     if (_waterTemp == null) return 'Walang datos mula sa sensor.';
-    if (_waterTemp! < 24) return 'Mababa ang temperatura. Maaaring makaapekto sa ulang.';
-    if (_waterTemp! > 30) return 'Mataas ang temperatura. Bantayan ang mga ulang.';
+    if (_waterTemp! < 24)
+      return 'Mababa ang temperatura. Maaaring makaapekto sa ulang.';
+    if (_waterTemp! > 30)
+      return 'Mataas ang temperatura. Bantayan ang mga ulang.';
     return 'Tamang-tama ang temperatura para sa paglaki ng ulang.';
   }
 
@@ -244,7 +249,8 @@ class _DashboardPageState extends State<DashboardPage>
   String get _turbidityDescription {
     if (_turbidity == null) return 'Walang datos mula sa sensor.';
     if (_turbidity! > 100) return 'Malabo ang tubig. Kailangang linisin.';
-    if (_turbidity! > 50) return 'Katamtamang kalinisan ng tubig. Bantayan pa rin.';
+    if (_turbidity! > 50)
+      return 'Katamtamang kalinisan ng tubig. Bantayan pa rin.';
     return 'Malinis ang tubig. Walang nakitang lason o dumi.';
   }
 
@@ -269,6 +275,11 @@ class _DashboardPageState extends State<DashboardPage>
     });
   }
 
+  void _closeNotificationDropdown() {
+    if (!_showNotificationDropdown) return;
+    setState(() => _showNotificationDropdown = false);
+  }
+
   void _acknowledgeAlert(String id) {
     final key = 'alert:$id';
     if (_seenNotificationKeys.contains(key)) return;
@@ -288,74 +299,107 @@ class _DashboardPageState extends State<DashboardPage>
     return 'Ligtas ang tubig at masigla ang mga ulang at tanim.';
   }
 
-  String get _yieldDisplay =>
-      _expectedYield != null ? '${_expectedYield!.toStringAsFixed(0)} kg' : '--';
+  String get _yieldDisplay => _expectedYield != null
+      ? '${_expectedYield!.toStringAsFixed(0)} kg'
+      : '--';
 
   // ── BUILD ──────────────────────────────────────────────────────────────
 
   void _onNavTapped(int index) {
     if (index == _currentNavIndex) return;
     setState(() {
+      _navHistory.add(_currentNavIndex);
       _currentNavIndex = index;
-      _isNavBarVisible = true;
     });
+    _isNavBarVisible.value = true;
+  }
+
+  bool get _canPopDashboard =>
+      _showNotificationDropdown || _navHistory.isNotEmpty;
+
+  void _handleDashboardBack() {
+    if (_showNotificationDropdown) {
+      _closeNotificationDropdown();
+      return;
+    }
+    if (_navHistory.isEmpty) return;
+    setState(() {
+      _currentNavIndex = _navHistory.removeLast();
+    });
+    _isNavBarVisible.value = true;
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF3F4F6),
-      extendBody: true,
-      appBar: _buildTopBar(context),
-      body: NotificationListener<ScrollNotification>(
-        onNotification: (ScrollNotification notification) {
-          if (notification is UserScrollNotification) {
-            if (notification.direction == ScrollDirection.reverse) {
-              if (_isNavBarVisible) setState(() => _isNavBarVisible = false);
-            } else if (notification.direction == ScrollDirection.forward) {
-              if (!_isNavBarVisible) setState(() => _isNavBarVisible = true);
+    return PopScope<void>(
+      canPop: !_canPopDashboard,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) _handleDashboardBack();
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF3F4F6),
+        extendBody: true,
+        appBar: _buildTopBar(context),
+        body: NotificationListener<ScrollNotification>(
+          onNotification: (ScrollNotification notification) {
+            if (notification.depth != 0) return false;
+            if (notification is UserScrollNotification) {
+              if (notification.direction == ScrollDirection.reverse) {
+                if (_isNavBarVisible.value) _isNavBarVisible.value = false;
+              } else if (notification.direction == ScrollDirection.forward) {
+                if (!_isNavBarVisible.value) _isNavBarVisible.value = true;
+              }
             }
-          }
-          if (notification.metrics.pixels >=
-              notification.metrics.maxScrollExtent - 20) {
-            if (!_isNavBarVisible) setState(() => _isNavBarVisible = true);
-          }
-          return false;
-        },
-        child: Stack(
-          children: [
-            IndexedStack(
-              index: _currentNavIndex,
-              children: [
-                _buildDashboardView(),
-                const TasksPage(),
-                YieldEstimationPage(
-                  onGrowthData: (expectedYield, shrimpHealth, plantHealth) {
-                    if (!mounted) return;
-                    setState(() {
-                      _expectedYield = expectedYield;
-                      _shrimpHealth = shrimpHealth;
-                      _plantHealth = plantHealth;
-                    });
-                  },
-                ),
-                const LogsPage(),
-              ],
-            ),
-            if (_showNotificationDropdown)
-              Positioned(
-                top: 0,
-                right: 12,
-                child: _buildNotificationDropdown(),
+            if (notification.metrics.pixels >=
+                notification.metrics.maxScrollExtent - 20) {
+              if (!_isNavBarVisible.value) _isNavBarVisible.value = true;
+            }
+            return false;
+          },
+          child: Stack(
+            children: [
+              IndexedStack(
+                index: _currentNavIndex,
+                children: [
+                  _buildDashboardView(),
+                  const TasksPage(),
+                  YieldEstimationPage(
+                    onGrowthData: (expectedYield, shrimpHealth, plantHealth) {
+                      if (!mounted) return;
+                      setState(() {
+                        _expectedYield = expectedYield;
+                        _shrimpHealth = shrimpHealth;
+                        _plantHealth = plantHealth;
+                      });
+                    },
+                  ),
+                  const LogsPage(),
+                ],
               ),
-          ],
+              if (_showNotificationDropdown)
+                Positioned(
+                  top: 0,
+                  right: 12,
+                  child: TapRegion(
+                    groupId: 'notification-dropdown',
+                    child: _buildNotificationDropdown(),
+                  ),
+                ),
+            ],
+          ),
         ),
-      ),
-      bottomNavigationBar: AnimatedSlide(
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOutCubic,
-        offset: _isNavBarVisible ? Offset.zero : const Offset(0, 1.0),
-        child: _buildBottomNavBar(),
+        bottomNavigationBar: ValueListenableBuilder<bool>(
+          valueListenable: _isNavBarVisible,
+          builder: (context, isNavBarVisible, child) {
+            return AnimatedSlide(
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeInOutCubic,
+              offset: isNavBarVisible ? Offset.zero : const Offset(0, 1.0),
+              child: child,
+            );
+          },
+          child: _buildBottomNavBar(),
+        ),
       ),
     );
   }
@@ -364,9 +408,10 @@ class _DashboardPageState extends State<DashboardPage>
 
   Widget _buildDashboardView() {
     return FadeTransition(
-      opacity: Tween<double>(begin: 0, end: 1).animate(
-        CurvedAnimation(parent: _fadeController, curve: Curves.easeIn),
-      ),
+      opacity: Tween<double>(
+        begin: 0,
+        end: 1,
+      ).animate(CurvedAnimation(parent: _fadeController, curve: Curves.easeIn)),
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(16, 24, 16, 100),
         child: Column(
@@ -510,54 +555,62 @@ class _DashboardPageState extends State<DashboardPage>
                 ),
 
                 // Bell icon — badge includes water alerts and assigned tasks.
-                SizedBox(
-                  width: 52,
-                  height: 48,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Positioned(
-                        left: 0,
-                        top: 0,
-                        child: IconButton(
-                          tooltip: 'Mga abiso at gawain',
-                          icon: Icon(
-                            Icons.notifications_none,
-                            color: textDark,
-                            size: 28,
-                          ),
-                          onPressed: _toggleNotificationDropdown,
-                        ),
-                      ),
-                      if (_hasUnreadNotifications)
+                TapRegion(
+                  groupId: 'notification-dropdown',
+                  onTapOutside: (_) => _closeNotificationDropdown(),
+                  child: SizedBox(
+                    width: 52,
+                    height: 48,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
                         Positioned(
-                          top: 3,
-                          right: 4,
-                          child: Container(
-                            constraints: const BoxConstraints(minWidth: 18),
-                            height: 18,
-                            padding: const EdgeInsets.symmetric(horizontal: 4),
-                            decoration: BoxDecoration(
-                              color: warningRed,
-                              borderRadius: BorderRadius.circular(10),
-                              border:
-                                  Border.all(color: Colors.white, width: 2),
+                          left: 0,
+                          top: 0,
+                          child: IconButton(
+                            tooltip: 'Mga abiso at gawain',
+                            icon: Icon(
+                              Icons.notifications_none,
+                              color: textDark,
+                              size: 28,
                             ),
-                            child: Center(
-                              child: Text(
-                                _notificationCount > 9
-                                    ? '9+'
-                                    : '$_notificationCount',
-                                style: const TextStyle(
+                            onPressed: _toggleNotificationDropdown,
+                          ),
+                        ),
+                        if (_hasUnreadNotifications)
+                          Positioned(
+                            top: 3,
+                            right: 4,
+                            child: Container(
+                              constraints: const BoxConstraints(minWidth: 18),
+                              height: 18,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: warningRed,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(
                                   color: Colors.white,
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w700,
+                                  width: 2,
+                                ),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  _notificationCount > 9
+                                      ? '9+'
+                                      : '$_notificationCount',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
 
@@ -694,8 +747,9 @@ class _DashboardPageState extends State<DashboardPage>
     combined.sort((a, b) {
       final aTs = a['createdAt'] as Timestamp?;
       final bTs = b['createdAt'] as Timestamp?;
-      return (bTs?.millisecondsSinceEpoch ?? 0)
-          .compareTo(aTs?.millisecondsSinceEpoch ?? 0);
+      return (bTs?.millisecondsSinceEpoch ?? 0).compareTo(
+        aTs?.millisecondsSinceEpoch ?? 0,
+      );
     });
     final displayed = combined;
 
@@ -744,12 +798,11 @@ class _DashboardPageState extends State<DashboardPage>
                       final bool isTask = alert['_kind'] == 'task';
                       final String message = isTask
                           ? ((alert['description'] as String?) ??
-                              'May bagong nakatalagang gawain.')
+                                'May bagong nakatalagang gawain.')
                           : ((alert['message'] as String?) ?? '');
-                      final String prio =
-                          ((alert['priority'] as String?) ?? '').toUpperCase();
-                      final bool isHigh =
-                          prio == 'HIGH' || prio == 'URGENT';
+                      final String prio = ((alert['priority'] as String?) ?? '')
+                          .toUpperCase();
+                      final bool isHigh = prio == 'HIGH' || prio == 'URGENT';
                       return InkWell(
                         onTap: isTask
                             ? () {
@@ -763,8 +816,8 @@ class _DashboardPageState extends State<DashboardPage>
                           isTask
                               ? Icons.assignment_outlined
                               : (isHigh
-                                  ? Icons.assignment_late
-                                  : Icons.water_drop),
+                                    ? Icons.assignment_late
+                                    : Icons.water_drop),
                           title,
                           message,
                           isTask
@@ -807,10 +860,7 @@ class _DashboardPageState extends State<DashboardPage>
               ),
               Text(
                 subtitle,
-                style: GoogleFonts.poppins(
-                  fontSize: 12,
-                  color: textMuted,
-                ),
+                style: GoogleFonts.poppins(fontSize: 12, color: textMuted),
               ),
             ],
           ),
@@ -823,8 +873,9 @@ class _DashboardPageState extends State<DashboardPage>
 
   Widget _buildStatusCard() {
     final cardColor = _hasAlerts ? warningRed : tealDark;
-    final statusIcon =
-        _hasAlerts ? Icons.warning_amber_rounded : Icons.check_circle;
+    final statusIcon = _hasAlerts
+        ? Icons.warning_amber_rounded
+        : Icons.check_circle;
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -950,8 +1001,7 @@ class _DashboardPageState extends State<DashboardPage>
             if (_hasAlerts) ...[
               const Spacer(),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(
                   color: warningRed,
                   borderRadius: BorderRadius.circular(12),
@@ -995,10 +1045,10 @@ class _DashboardPageState extends State<DashboardPage>
               final String message = (alert['message'] as String?) ?? '';
               final String priority =
                   ((alert['priority'] as String?) ?? 'URGENT').toUpperCase();
-              final bool isHigh =
-                  priority == 'HIGH' || priority == 'URGENT';
-              final Color alertColor =
-                  isHigh ? warningRed : const Color(0xFFF59E0B);
+              final bool isHigh = priority == 'HIGH' || priority == 'URGENT';
+              final Color alertColor = isHigh
+                  ? warningRed
+                  : const Color(0xFFF59E0B);
 
               return Padding(
                 padding: const EdgeInsets.only(bottom: 12),
@@ -1028,8 +1078,11 @@ class _DashboardPageState extends State<DashboardPage>
                           color: alertColor.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Icon(Icons.warning_amber_rounded,
-                            color: alertColor, size: 24),
+                        child: Icon(
+                          Icons.warning_amber_rounded,
+                          color: alertColor,
+                          size: 24,
+                        ),
                       ),
                       const SizedBox(width: 16),
                       Expanded(
@@ -1037,8 +1090,7 @@ class _DashboardPageState extends State<DashboardPage>
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(
-                              mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
                                 Expanded(
                                   child: Text(
@@ -1052,7 +1104,9 @@ class _DashboardPageState extends State<DashboardPage>
                                 ),
                                 Container(
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 8, vertical: 4),
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: alertColor,
                                     borderRadius: BorderRadius.circular(6),
@@ -1083,8 +1137,8 @@ class _DashboardPageState extends State<DashboardPage>
                               onTap: () {
                                 setState(() {
                                   _currentNavIndex = 1;
-                                  _isNavBarVisible = true;
                                 });
+                                _isNavBarVisible.value = true;
                               },
                               child: Text(
                                 "Tingnan ang gawain →",
@@ -1236,10 +1290,7 @@ class _DashboardPageState extends State<DashboardPage>
                 const SizedBox(height: 4),
                 Text(
                   description,
-                  style: GoogleFonts.poppins(
-                    fontSize: 13,
-                    color: textMuted,
-                  ),
+                  style: GoogleFonts.poppins(fontSize: 13, color: textMuted),
                 ),
               ],
             ),

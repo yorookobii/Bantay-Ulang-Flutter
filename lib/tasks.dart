@@ -13,7 +13,8 @@ class TasksPage extends StatefulWidget {
   State<TasksPage> createState() => _TasksPageState();
 }
 
-class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMixin {
+class _TasksPageState extends State<TasksPage>
+    with SingleTickerProviderStateMixin {
   final Color tealLight = const Color(0xFFE6FFF9);
   final Color teal = const Color(0xFF0D9488);
   final Color tealDark = const Color(0xFF0F766E);
@@ -27,6 +28,7 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
 
   List<QueryDocumentSnapshot> _tasks = [];
   final Set<String> _notifiedTaskIds = <String>{};
+  final Set<String> _completingTaskIds = <String>{};
   bool _isLoading = true;
   String? _errorMessage;
 
@@ -48,44 +50,54 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
         .orderBy('createdAt', descending: true)
         .snapshots()
         .listen(
-      (snapshot) {
-        if (!mounted) return;
-        for (final change in snapshot.docChanges) {
-          final data = change.doc.data() as Map<String, dynamic>;
-          if ((data['status'] as String?) != 'pending') {
-            unawaited(
-              NotificationService.instance
-                  .resolveNotification('task:${change.doc.id}'),
-            );
-            continue;
-          }
-          if (change.type != DocumentChangeType.added ||
-              !_notifiedTaskIds.add(change.doc.id)) {
-            continue;
-          }
-          unawaited(
-            NotificationService.instance.showTask(
-              id: change.doc.id,
-              title: (data['title'] as String?) ?? 'Nakatalagang Gawain',
-              description: (data['description'] as String?) ?? '',
-            ),
-          );
-        }
-        setState(() {
-          _isLoading = false;
-          _errorMessage = null;
-          _tasks = snapshot.docs;
-        });
-      },
-      onError: (error) {
-        debugPrint('Tasks subscription error: $error');
-        if (!mounted) return;
-        setState(() {
-          _isLoading = false;
-          _errorMessage = 'Hindi ma-load ang mga gawain. Subukan muli.';
-        });
-      },
-    );
+          (snapshot) {
+            if (!mounted) return;
+            for (final change in snapshot.docChanges) {
+              final data = change.doc.data() as Map<String, dynamic>;
+              if ((data['status'] as String?) != 'pending') {
+                unawaited(
+                  NotificationService.instance.resolveNotification(
+                    'task:${change.doc.id}',
+                  ),
+                );
+                continue;
+              }
+              if (change.type != DocumentChangeType.added ||
+                  !_notifiedTaskIds.add(change.doc.id)) {
+                continue;
+              }
+              unawaited(
+                NotificationService.instance.showTask(
+                  id: change.doc.id,
+                  title: (data['title'] as String?) ?? 'Nakatalagang Gawain',
+                  description: (data['description'] as String?) ?? '',
+                ),
+              );
+            }
+            setState(() {
+              final pendingTasks = snapshot.docs.where((doc) {
+                final data = doc.data();
+                return (data['status'] as String?) == 'pending';
+              }).toList();
+              final pendingTaskIds = pendingTasks.map((doc) => doc.id).toSet();
+
+              _isLoading = false;
+              _errorMessage = null;
+              _completingTaskIds.removeWhere(
+                (taskId) => !pendingTaskIds.contains(taskId),
+              );
+              _tasks = pendingTasks;
+            });
+          },
+          onError: (error) {
+            debugPrint('Tasks subscription error: $error');
+            if (!mounted) return;
+            setState(() {
+              _isLoading = false;
+              _errorMessage = 'Hindi ma-load ang mga gawain. Subukan muli.';
+            });
+          },
+        );
   }
 
   @override
@@ -96,25 +108,64 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
   }
 
   Future<void> _markAsCompleted(String docId) async {
+    if (_completingTaskIds.contains(docId)) return;
+
+    setState(() => _completingTaskIds.add(docId));
+
     try {
-      await FirebaseFirestore.instance
-          .collection('tasks')
-          .doc(docId)
-          .update({'status': 'done'});
+      await FirebaseFirestore.instance.collection('tasks').doc(docId).update({
+        'status': 'done',
+      });
+      if (mounted) {
+        _showSuccessSnackbar('Matagumpay mong natapos ang gawain.');
+      }
     } catch (e) {
       debugPrint('Failed to mark task complete: $e');
       if (mounted) {
+        setState(() => _completingTaskIds.remove(docId));
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Hindi ma-update ang gawain. Subukan muli.', style: GoogleFonts.poppins()),
+            content: Text(
+              'Hindi ma-update ang gawain. Subukan muli.',
+              style: GoogleFonts.poppins(),
+            ),
             backgroundColor: const Color(0xFFDC2626),
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
             margin: const EdgeInsets.all(16),
           ),
         );
       }
     }
+  }
+
+  void _showSuccessSnackbar(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.check_circle, color: Colors.white),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  message,
+                  style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: tealDark,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          margin: const EdgeInsets.all(16),
+        ),
+      );
   }
 
   Color _statusColor(String status) {
@@ -153,7 +204,20 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
   String _fmtTimestamp(Timestamp? ts) {
     if (ts == null) return '—';
     final d = ts.toDate();
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
     return '${months[d.month - 1]} ${d.day}, ${d.year}';
   }
 
@@ -168,40 +232,54 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
         child: _isLoading
             ? Center(child: CircularProgressIndicator(color: teal))
             : _errorMessage != null
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(32),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.cloud_off_rounded, size: 56, color: textMuted),
-                          const SizedBox(height: 16),
-                          Text(
-                            _errorMessage!,
-                            textAlign: TextAlign.center,
-                            style: GoogleFonts.poppins(fontSize: 15, color: textMuted, fontWeight: FontWeight.w500),
-                          ),
-                          const SizedBox(height: 20),
-                          ElevatedButton.icon(
-                            onPressed: () {
-                              _tasksSub?.cancel();
-                              setState(() { _isLoading = true; _errorMessage = null; });
-                              _subscribeTasks();
-                            },
-                            icon: const Icon(Icons.refresh_rounded),
-                            label: Text("Subukan Muli", style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: teal,
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                              elevation: 0,
-                            ),
-                          ),
-                        ],
+            ? Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.cloud_off_rounded, size: 56, color: textMuted),
+                      const SizedBox(height: 16),
+                      Text(
+                        _errorMessage!,
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.poppins(
+                          fontSize: 15,
+                          color: textMuted,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
-                    ),
-                  )
-                : SingleChildScrollView(
+                      const SizedBox(height: 20),
+                      ElevatedButton.icon(
+                        onPressed: () {
+                          _tasksSub?.cancel();
+                          setState(() {
+                            _isLoading = true;
+                            _errorMessage = null;
+                          });
+                          _subscribeTasks();
+                        },
+                        icon: const Icon(Icons.refresh_rounded),
+                        label: Text(
+                          "Subukan Muli",
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: teal,
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          elevation: 0,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            : SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(16, 24, 16, 120),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -238,10 +316,14 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
                     _tasks.isEmpty
                         ? _buildEmptyState()
                         : Column(
-                            children: _tasks.map((doc) => Padding(
-                              padding: const EdgeInsets.only(bottom: 12),
-                              child: _buildTaskCard(doc),
-                            )).toList(),
+                            children: _tasks
+                                .map(
+                                  (doc) => Padding(
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: _buildTaskCard(doc),
+                                  ),
+                                )
+                                .toList(),
                           ),
                   ],
                 ),
@@ -258,6 +340,7 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
     final String status = data['status'] ?? 'pending';
     final Timestamp? createdAt = data['createdAt'] as Timestamp?;
     final bool isDone = status == 'done';
+    final bool isCompleting = _completingTaskIds.contains(docId);
 
     return Container(
       decoration: BoxDecoration(
@@ -290,7 +373,9 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
                       width: 48,
                       height: 48,
                       decoration: BoxDecoration(
-                        color: isDone ? teal.withOpacity(0.1) : seaBlue.withOpacity(0.1),
+                        color: isDone
+                            ? teal.withOpacity(0.1)
+                            : seaBlue.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Icon(
@@ -331,7 +416,11 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
 
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 16),
-                  child: Divider(height: 1, thickness: 1, color: Color(0xFFF3F4F6)),
+                  child: Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: Color(0xFFF3F4F6),
+                  ),
                 ),
 
                 Row(
@@ -354,7 +443,10 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
                         color: _statusBg(status),
                         borderRadius: BorderRadius.circular(20),
@@ -385,8 +477,14 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
                       )
                     else
                       ElevatedButton.icon(
-                        onPressed: () => _markAsCompleted(docId),
-                        icon: const Icon(Icons.check, size: 18, color: Colors.white),
+                        onPressed: isCompleting
+                            ? null
+                            : () => _markAsCompleted(docId),
+                        icon: const Icon(
+                          Icons.check,
+                          size: 18,
+                          color: Colors.white,
+                        ),
                         label: Text(
                           "Tapusin",
                           style: GoogleFonts.poppins(
@@ -398,7 +496,10 @@ class _TasksPageState extends State<TasksPage> with SingleTickerProviderStateMix
                         style: ElevatedButton.styleFrom(
                           backgroundColor: teal,
                           elevation: 0,
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(8),
                           ),

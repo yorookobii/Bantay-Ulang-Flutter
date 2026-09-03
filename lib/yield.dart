@@ -308,7 +308,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  "Expected Yield and Income",
+                                  "Inaasahang Ani at Kita",
                                   style: GoogleFonts.poppins(
                                     fontSize: 26,
                                     fontWeight: FontWeight.w700,
