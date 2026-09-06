@@ -49,6 +49,11 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
   int? _rfReadingsUsed;
   DateTime? _rfUpdatedAt;
 
+  // Target harvest = cycleStart + 150 days (5-month grow-out cycle) —
+  // computed here instead of read from Firestore's targetHarvestDate field,
+  // mirroring web/yieldPrediction.js's estHarvestDate calculation.
+  static const int _growoutDays = 150;
+
   // Panelist requirement: yield prediction only after 90 days of real
   // cultivation data — mirrors RF_GATE_DAYS in web/yieldPrediction.js.
   static const int _rfGateDays = 90;
@@ -71,7 +76,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
   }
 
   String get _yieldBigText {
-    if (_rfAvailable) return '${_rfProjectedYield!.toStringAsFixed(0)} kg';
+    if (_rfAvailable) return '${_rfProjectedYield!.toStringAsFixed(1)} kg';
     if (!_eligible) return 'Pending';
     return 'Prediction being processed';
   }
@@ -156,8 +161,9 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
               _rfUpdatedAt = (data['rfUpdatedAt'] as Timestamp?)?.toDate();
               _cycleStart = cycleStart;
               _cycleEnd = (data['cycleEnd'] as Timestamp?)?.toDate();
-              _targetHarvestDate = (data['targetHarvestDate'] as Timestamp?)
-                  ?.toDate();
+              _targetHarvestDate = cycleStart?.add(
+                const Duration(days: _growoutDays),
+              );
               _survivalRate = (data['survivalRate'] as num?)?.toDouble() ?? 0;
               _summaryNote = (data['summaryNote'] as String?) ?? '';
               _eligible = eligible;
