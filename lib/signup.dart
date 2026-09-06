@@ -369,18 +369,19 @@ class _SignupPageState extends State<SignupPage>
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _buildModeControl(),
-              const SizedBox(height: 32),
+              const SizedBox(height: 28),
               Text(
                 _isSignIn ? 'Welcome Back' : 'Create Account',
                 textAlign: TextAlign.center,
                 style: GoogleFonts.poppins(
-                  fontSize: 32,
+                  fontSize: 28,
                   fontWeight: FontWeight.w700,
                   color: _tealDark,
-                  letterSpacing: -0.5,
+                  letterSpacing: -0.2,
+                  height: 1.2,
                 ),
               ),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               Text(
                 _isSignIn
                     ? 'Log in to your Bantay Ulang account'
@@ -390,9 +391,10 @@ class _SignupPageState extends State<SignupPage>
                   fontSize: 14,
                   color: _textMuted,
                   letterSpacing: 0.3,
+                  height: 1.4,
                 ),
               ),
-              const SizedBox(height: 32),
+              const SizedBox(height: 28),
               if (!_isSignIn) ...[
                 _buildTextField(
                   controller: _nameController,
@@ -434,14 +436,14 @@ class _SignupPageState extends State<SignupPage>
               ),
               if (!_isSignIn) ...[
                 const SizedBox(height: 7),
-                Text(
-                  'Gumamit ng hindi bababa sa 8 character.',
-                  style: GoogleFonts.poppins(fontSize: 12, color: _textMuted),
-                ),
+                // Text(
+                //   'Gumamit ng hindi bababa sa 8 character.',
+                //   style: GoogleFonts.poppins(fontSize: 12, color: _textMuted),
+                // ),
                 const SizedBox(height: 22),
                 _buildPasswordField(
                   controller: _confirmPasswordController,
-                  label: 'Kumpirmahin ang Password',
+                  label: 'Confirm ang Password',
                   visible: _confirmPasswordVisible,
                   onVisibilityChanged: () {
                     setState(
@@ -459,7 +461,7 @@ class _SignupPageState extends State<SignupPage>
                   alignment: Alignment.centerRight,
                   child: TextButton(
                     onPressed: _isLoading ? null : _resetPassword,
-                    child: const Text('Nakalimutan ang Password?'),
+                    child: const Text('Forgot Password?'),
                   ),
                 ),
               ] else
@@ -507,7 +509,7 @@ class _SignupPageState extends State<SignupPage>
                           ),
                         )
                       : Text(
-                          _isSignIn ? 'Mag-log in' : 'Gumawa ng Account',
+                          _isSignIn ? 'Log in' : 'Create an Account',
                           style: GoogleFonts.poppins(
                             fontSize: 15,
                             fontWeight: FontWeight.w700,
@@ -524,7 +526,7 @@ class _SignupPageState extends State<SignupPage>
 
   Widget _buildModeControl() {
     return Container(
-      padding: const EdgeInsets.all(6),
+      padding: const EdgeInsets.all(5),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
@@ -540,22 +542,23 @@ class _SignupPageState extends State<SignupPage>
       ),
       child: Row(
         children: [
-          _modeButton('Mag-log in', true),
-          _modeButton('Gumawa ng Account', false),
+          _modeButton('Log in', true, flex: 2),
+          _modeButton('Create an Account', false, flex: 3),
         ],
       ),
     );
   }
 
-  Widget _modeButton(String label, bool signIn) {
+  Widget _modeButton(String label, bool signIn, {int flex = 1}) {
     final selected = _isSignIn == signIn;
     return Expanded(
+      flex: flex,
       child: InkWell(
         onTap: () => _setMode(signIn),
         borderRadius: BorderRadius.circular(50),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 300),
-          padding: const EdgeInsets.symmetric(vertical: 12),
+          padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 10),
           decoration: BoxDecoration(
             gradient: selected
                 ? const LinearGradient(
@@ -575,14 +578,18 @@ class _SignupPageState extends State<SignupPage>
                   ]
                 : const [],
           ),
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            style: GoogleFonts.poppins(
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-              color: selected ? Colors.white : _textMuted,
-              letterSpacing: 0.5,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              style: GoogleFonts.poppins(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: selected ? Colors.white : _textMuted,
+                letterSpacing: 0.2,
+              ),
             ),
           ),
         ),
@@ -697,9 +704,9 @@ class _SignupPageState extends State<SignupPage>
     const borderColor = Color(0xFFD1D5DB);
     return InputDecoration(
       hintText: switch (label) {
-        'Buong Pangalan' => 'John Doe',
+        'Name' => 'John Doe',
         'Email Address' => 'you@example.com',
-        'Kumpirmahin ang Password' => 'Confirm your password',
+        'Confirm Password' => 'Confirm your password',
         _ => 'Enter your password',
       },
       prefixIcon: Icon(icon, color: _teal, size: 21),
@@ -808,7 +815,7 @@ class GlassmorphicCard extends StatelessWidget {
       child: BackdropFilter(
         filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
         child: Container(
-          padding: const EdgeInsets.all(32),
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 30),
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topLeft,

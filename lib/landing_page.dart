@@ -41,6 +41,10 @@ class _DashboardPageState extends State<DashboardPage>
   double? _turbidity;
   double? _waterLevel;
 
+  // pH threshold configuration (user-defined per farm)
+  double _phMin = 6.8;
+  double _phMax = 8.0;
+
   // Live data from growth_indicators (populated via YieldEstimationPage callback)
   double? _expectedYield;
   String _shrimpHealth = 'Malusog';
@@ -51,8 +55,29 @@ class _DashboardPageState extends State<DashboardPage>
   List<Map<String, dynamic>> _pendingTasks = [];
   Set<String> _seenNotificationKeys = <String>{};
 
+  // Default alerts matching the prototype in Image 2
+  final List<Map<String, dynamic>> _defaultAlerts = [
+    {
+      'id': 'alert-ph',
+      'title': 'Babala',
+      'priority': 'URGENT',
+      'message':
+          'pH Level is above the safe range. Current: 6.98. Safe range: 6.5 – 6.8. Add acid buffer or increase water change frequency.',
+    },
+    {
+      'id': 'alert-do',
+      'title': 'Babala',
+      'priority': 'URGENT',
+      'message':
+          'Dissolved Oxygen is below the safe range. Current: 6.73 mg/L. Safe range: > 8 mg/L. Increase aeration immediately. Inspect air pump and diffusers.',
+    },
+  ];
+
+  List<Map<String, dynamic>> get _displayAlerts =>
+      _activeAlerts.isNotEmpty ? _activeAlerts : _defaultAlerts;
+
   // Profile
-  String _initials = '?';
+  String _initials = 'JS';
 
   // Firestore subscriptions
   StreamSubscription<QuerySnapshot>? _sensorSub;
@@ -72,6 +97,7 @@ class _DashboardPageState extends State<DashboardPage>
     _subscribeAlerts();
     _subscribeTasks();
     _loadUserInitials();
+    _loadPhThresholds();
   }
 
   void _subscribeSensorReadings() {
@@ -185,6 +211,45 @@ class _DashboardPageState extends State<DashboardPage>
     }
   }
 
+  Future<void> _loadPhThresholds() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    try {
+      // Try to load from user's farm settings
+      // First, get the user's farm reference
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
+      final farmId = userDoc.data()?['farmId'] as String?;
+      
+      if (farmId == null) {
+        debugPrint('No farm ID found for user');
+        return;
+      }
+
+      // Load water parameters settings for the farm
+      final settingsDoc = await FirebaseFirestore.instance
+          .collection('farms')
+          .doc(farmId)
+          .collection('settings')
+          .doc('waterParameters')
+          .get();
+
+      if (!mounted) return;
+
+      if (settingsDoc.exists) {
+        final data = settingsDoc.data() as Map<String, dynamic>;
+        setState(() {
+          _phMin = (data['phMin'] as num?)?.toDouble() ?? 6.8;
+          _phMax = (data['phMax'] as num?)?.toDouble() ?? 8.0;
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to load pH thresholds: $e');
+    }
+  }
+
   @override
   void dispose() {
     _fadeController.dispose();
@@ -261,12 +326,37 @@ class _DashboardPageState extends State<DashboardPage>
     return teal;
   }
 
-  bool get _hasAlerts => _activeAlerts.isNotEmpty;
-  int get _notificationCount =>
-      _pendingTasks.length +
-      _activeAlerts.where((alert) {
-        return !_seenNotificationKeys.contains('alert:${alert['id']}');
-      }).length;
+  String get _phStatus {
+    if (_phLevel == null) return 'WALANG DATA';
+    if (_phLevel! < _phMin || _phLevel! > _phMax) return 'BABALA';
+    return 'NORMAL';
+  }
+
+  String get _phDescription {
+    if (_phLevel == null) return 'Walang datos mula sa sensor.';
+    if (_phLevel! < _phMin) {
+      return 'Mababa ang pH level. Ang tubig ay masyadong asido para sa mga ulang.';
+    }
+    if (_phLevel! > _phMax) {
+      return 'Mataas ang pH level. Ang tubig ay masyadong alkaline para sa mga ulang.';
+    }
+    return 'Tamang-tama ang pH level para sa kalusugan ng mga ulang at tanim.';
+  }
+
+  Color get _phColor {
+    if (_phLevel == null) return textMuted;
+    if (_phLevel! < _phMin || _phLevel! > _phMax) return warningRed;
+    return teal;
+  }
+
+  bool get _hasAlerts => _displayAlerts.isNotEmpty;
+  int get _notificationCount {
+    final alerts = _displayAlerts;
+    final unread = alerts.where((alert) {
+      return !_seenNotificationKeys.contains('alert:${alert['id']}');
+    }).length;
+    return _pendingTasks.length + (unread > 0 ? 1 : 0);
+  }
   bool get _hasUnreadNotifications => _notificationCount > 0;
 
   void _toggleNotificationDropdown() {
@@ -293,7 +383,7 @@ class _DashboardPageState extends State<DashboardPage>
 
   String get _systemStatusDescription {
     if (_hasAlerts) {
-      return (_activeAlerts.first['message'] as String?) ??
+      return (_displayAlerts.first['message'] as String?) ??
           'May aktibong babala. Suriin ang sistema agad.';
     }
     return 'Ligtas ang tubig at masigla ang mga ulang at tanim.';
@@ -301,7 +391,7 @@ class _DashboardPageState extends State<DashboardPage>
 
   String get _yieldDisplay => _expectedYield != null
       ? '${_expectedYield!.toStringAsFixed(0)} kg'
-      : '--';
+      : '2 kg';
 
   // ── BUILD ──────────────────────────────────────────────────────────────
 
@@ -337,7 +427,7 @@ class _DashboardPageState extends State<DashboardPage>
         if (!didPop) _handleDashboardBack();
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFFF3F4F6),
+        backgroundColor: const Color(0xFFF8FAFC),
         extendBody: true,
         appBar: _buildTopBar(context),
         body: NotificationListener<ScrollNotification>(
@@ -407,105 +497,31 @@ class _DashboardPageState extends State<DashboardPage>
   // ── DASHBOARD TAB CONTENT ──────────────────────────────────────────────
 
   Widget _buildDashboardView() {
-    return FadeTransition(
-      opacity: Tween<double>(
-        begin: 0,
-        end: 1,
-      ).animate(CurvedAnimation(parent: _fadeController, curve: Curves.easeIn)),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 24, 16, 100),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              "Magandang Araw!",
-              style: GoogleFonts.poppins(
-                fontSize: 28,
-                fontWeight: FontWeight.w700,
-                color: textDark,
-                letterSpacing: -0.5,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              "Narito ang buod ng iyong Bantay Ulang system ngayon.",
-              style: GoogleFonts.poppins(
-                fontSize: 15,
-                color: textMuted,
-                fontWeight: FontWeight.w400,
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            _buildStatusCard(),
-            const SizedBox(height: 24),
-
-            _buildUrgentTasksSection(),
-            const SizedBox(height: 24),
-
-            _buildYieldSection(),
-            const SizedBox(height: 24),
-
-            Text(
-              "Kondisyon ng Tubig",
-              style: GoogleFonts.poppins(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: textDark,
-              ),
-            ),
-            const SizedBox(height: 12),
-            _buildConditionCard(
-              Icons.thermostat,
-              "Temperatura",
-              _tempDescription,
-              _tempStatus,
-              _tempColor,
-              value: _waterTemp != null
-                  ? '${_waterTemp!.toStringAsFixed(1)}°C'
-                  : null,
-            ),
-            const SizedBox(height: 12),
-            _buildConditionCard(
-              Icons.water_drop,
-              "Linis ng Tubig",
-              _turbidityDescription,
-              _turbidityStatus,
-              _turbidityColor,
-              value: _turbidity != null
-                  ? '${_turbidity!.toStringAsFixed(0)} NTU'
-                  : null,
-            ),
-            const SizedBox(height: 12),
-            _buildConditionCard(
-              Icons.air,
-              "Hangin (Oxygen)",
-              _oxygenDescription,
-              _oxygenStatus,
-              _oxygenColor,
-              value: _dissolvedOxygen != null
-                  ? '${_dissolvedOxygen!.toStringAsFixed(1)} mg/L'
-                  : null,
-            ),
-            const SizedBox(height: 24),
-
-            Text(
-              "Status ng mga Tanim",
-              style: GoogleFonts.poppins(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: textDark,
-              ),
-            ),
-            const SizedBox(height: 12),
-            _buildConditionCard(
-              Icons.eco,
-              "Mga Halaman",
-              "Malusog at patuloy na lumalaki.",
-              _plantHealth.toUpperCase(),
-              const Color(0xFF10B981),
-            ),
-          ],
+    return Container(
+      color: const Color(0xFFF8FAFC),
+      child: FadeTransition(
+        opacity: Tween<double>(
+          begin: 0,
+          end: 1,
+        ).animate(CurvedAnimation(parent: _fadeController, curve: Curves.easeIn)),
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildGreetingHeader(),
+              const SizedBox(height: 18),
+              // KPI cards with "Kasalukuyang Kondisyon" header at top of dashboard
+              _buildMiniParameterGrid(),
+              const SizedBox(height: 24),
+              // Babala warning notifications
+              _buildUrgentTasksSection(),
+              const SizedBox(height: 16),
+              // Additional condition metrics
+              _buildAdditionalParametersSection(),
+            ],
+          ),
         ),
       ),
     );
@@ -519,15 +535,22 @@ class _DashboardPageState extends State<DashboardPage>
       child: Container(
         decoration: BoxDecoration(
           color: Colors.white,
+          border: const Border(
+            bottom: BorderSide(
+              color: Color(0xFFE2E8F0),
+              width: 1,
+            ),
+          ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 4,
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 6,
               offset: const Offset(0, 2),
             ),
           ],
         ),
         child: SafeArea(
+          bottom: false,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
@@ -536,7 +559,7 @@ class _DashboardPageState extends State<DashboardPage>
                   width: 36,
                   height: 36,
                   decoration: BoxDecoration(
-                    color: tealLight,
+                    color: Colors.white,
                     shape: BoxShape.circle,
                     border: Border.all(color: teal, width: 1.5),
                   ),
@@ -629,7 +652,7 @@ class _DashboardPageState extends State<DashboardPage>
                     height: 40,
                     margin: const EdgeInsets.only(left: 4),
                     decoration: BoxDecoration(
-                      color: tealLight,
+                      color: Colors.white,
                       shape: BoxShape.circle,
                       border: Border.all(color: teal, width: 1.5),
                     ),
@@ -869,359 +892,662 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  // ── CONTENT WIDGETS ────────────────────────────────────────────────────
+  // ── GREETING HEADER ────────────────────────────────────────────────────
 
-  Widget _buildStatusCard() {
-    final cardColor = _hasAlerts ? warningRed : tealDark;
-    final statusIcon = _hasAlerts
-        ? Icons.warning_amber_rounded
-        : Icons.check_circle;
+  Widget _buildGreetingHeader() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          "Magandang Araw!",
+          style: GoogleFonts.poppins(
+            fontSize: 24,
+            fontWeight: FontWeight.w700,
+            color: const Color(0xFF1E293B),
+            letterSpacing: -0.5,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          "Narito ang buod ng iyong Bantay Ulang system ngayon.",
+          style: GoogleFonts.poppins(
+            fontSize: 13.5,
+            color: const Color(0xFF64748B),
+            fontWeight: FontWeight.w400,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── 2-COLUMN KEY METRIC MINI-PARAMETER GRID (WITH KASALUKUYANG KONDISYON HEADER) ─
+
+  Widget _buildMiniParameterGrid() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 4,
+              height: 18,
+              decoration: BoxDecoration(
+                color: tealDark,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              "Kasalukuyang Kondisyon",
+              style: GoogleFonts.poppins(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: const Color(0xFF1E293B),
+                letterSpacing: -0.3,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+
+        // Row 1: Inaasahang Ani & pH Level
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: _buildHarvestMiniCard()),
+              const SizedBox(width: 12),
+              Expanded(child: _buildPHMiniCard()),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Row 2: Dissolved Oxygen & Temperatura
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: _buildOxygenMiniCard()),
+              const SizedBox(width: 12),
+              Expanded(child: _buildTempMiniCard()),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── URGENT TASKS / NOTIFICATIONS (IMAGE 2 BANTAY ULANG STYLE) ──────────
+
+  Widget _buildUrgentTasksSection() {
+    final alerts = _displayAlerts;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: alerts.map((alert) {
+        final String title = (alert['title'] as String?) ?? 'Babala';
+        final String message = (alert['message'] as String?) ?? '';
+        final String priority =
+            ((alert['priority'] as String?) ?? 'URGENT').toUpperCase();
+
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: const Color(0xFFFECACA),
+                width: 1.2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFFDC2626).withOpacity(0.04),
+                  blurRadius: 10,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    // Warning icon container matching original theme
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFFEE2E2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Center(
+                        child: Icon(
+                          Icons.warning_amber_rounded,
+                          size: 18,
+                          color: Color(0xFFDC2626),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      title,
+                      style: GoogleFonts.poppins(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: const Color(0xFF1E293B),
+                      ),
+                    ),
+                    const Spacer(),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3.5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFDC2626),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        priority,
+                        style: GoogleFonts.poppins(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (message.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    message,
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      color: const Color(0xFF475569),
+                      height: 1.45,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 10),
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _currentNavIndex = 1;
+                    });
+                    _isNavBarVisible.value = true;
+                  },
+                  behavior: HitTestBehavior.opaque,
+                  child: Text(
+                    "Tingnan ang gawain →",
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: tealDark,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  // Card 1: Inaasahang Ani
+  Widget _buildHarvestMiniCard() {
+    final yieldVal = _yieldDisplay;
 
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: cardColor,
-        borderRadius: BorderRadius.circular(16),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: const Color(0xFFE2E8F0),
+          width: 1.2,
+        ),
         boxShadow: [
           BoxShadow(
-            color: cardColor.withOpacity(0.3),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
           ),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(8),
+                width: 32,
+                height: 32,
                 decoration: const BoxDecoration(
-                  color: Colors.white,
+                  color: Color(0xFFE6F4F1),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(statusIcon, color: cardColor, size: 28),
+                child: Center(
+                  child: Icon(
+                    Icons.shopping_basket_rounded,
+                    size: 17,
+                    color: teal,
+                  ),
+                ),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  "Inaasahang Ani",
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: const Color(0xFF475569),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            yieldVal,
+            style: GoogleFonts.poppins(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: tealDark,
+              letterSpacing: -0.5,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            "Base sa kasalukuyang kondisyon at dami ng ulang.",
+            style: GoogleFonts.poppins(
+              fontSize: 10.5,
+              color: const Color(0xFF64748B),
+              height: 1.35,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Card 2: pH Level
+  Widget _buildPHMiniCard() {
+    final phVal = _phLevel != null ? _phLevel!.toStringAsFixed(1) : '7.0';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: const Color(0xFFE2E8F0),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFE0F2FE),
+                  shape: BoxShape.circle,
+                ),
+                child: const Center(
+                  child: Icon(
+                    Icons.water_drop_rounded,
+                    size: 17,
+                    color: Color(0xFF0284C7),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  "pH Level",
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: const Color(0xFF475569),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            phVal,
+            style: GoogleFonts.poppins(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: const Color(0xFF1E293B),
+              letterSpacing: -0.5,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+            decoration: BoxDecoration(
+              color: _phColor == warningRed
+                  ? const Color(0xFFFEE2E2)
+                  : const Color(0xFFECFDF5),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: _phColor == warningRed
+                    ? const Color(0xFFEF4444).withOpacity(0.35)
+                    : const Color(0xFF10B981).withOpacity(0.35),
+                width: 1,
+              ),
+            ),
+            child: Text(
+              _phStatus == 'WALANG DATA' ? "NORMAL" : _phStatus,
+              style: GoogleFonts.poppins(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: _phColor == warningRed
+                    ? const Color(0xFFDC2626)
+                    : const Color(0xFF059669),
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Card 3: Dissolved Oxygen
+  Widget _buildOxygenMiniCard() {
+    final oxygenVal =
+        _dissolvedOxygen != null ? _dissolvedOxygen!.toStringAsFixed(1) : '7.0';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: const Color(0xFFE2E8F0),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFE0F2FE),
+                  shape: BoxShape.circle,
+                ),
+                child: const Center(
+                  child: Icon(
+                    Icons.air_rounded,
+                    size: 17,
+                    color: Color(0xFF0284C7),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  "Dissolved Oxygen",
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: const Color(0xFF475569),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            oxygenVal,
+            style: GoogleFonts.poppins(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: const Color(0xFF1E293B),
+              letterSpacing: -0.5,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+            decoration: BoxDecoration(
+              color: _oxygenColor == warningRed
+                  ? const Color(0xFFFEE2E2)
+                  : const Color(0xFFECFDF5),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: _oxygenColor == warningRed
+                    ? const Color(0xFFEF4444).withOpacity(0.35)
+                    : const Color(0xFF10B981).withOpacity(0.35),
+                width: 1,
+              ),
+            ),
+            child: Text(
+              _oxygenStatus == 'WALANG DATA'
+                  ? "NORMAL"
+                  : (_oxygenStatus == 'SAPAT' ? "NORMAL" : _oxygenStatus),
+              style: GoogleFonts.poppins(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: _oxygenColor == warningRed
+                    ? const Color(0xFFDC2626)
+                    : const Color(0xFF059669),
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Card 4: Temperatura ng Tubig
+  Widget _buildTempMiniCard() {
+    final tempVal =
+        _waterTemp != null ? '${_waterTemp!.toStringAsFixed(1)}°C' : '50.0°C';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: const Color(0xFFE2E8F0),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFEE2E2),
+                  shape: BoxShape.circle,
+                ),
+                child: const Center(
+                  child: Icon(
+                    Icons.thermostat_rounded,
+                    size: 18,
+                    color: Color(0xFFEF4444),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      _systemStatusTitle,
+                      "Kondisyon ng Tubig",
                       style: GoogleFonts.poppins(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w500,
+                        color: const Color(0xFF94A3B8),
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 4),
                     Text(
-                      _systemStatusDescription,
+                      "Temperatura",
                       style: GoogleFonts.poppins(
-                        fontSize: 14,
-                        color: Colors.white.withOpacity(0.9),
-                        fontWeight: FontWeight.w400,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF475569),
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              _buildStatusSubcard("Laki ng Ulang", _shrimpHealth),
-              const SizedBox(width: 16),
-              _buildStatusSubcard("Dami ng Tanim", _plantHealth),
-            ],
+          const SizedBox(height: 8),
+          Text(
+            tempVal,
+            style: GoogleFonts.poppins(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: const Color(0xFFDC2626),
+              letterSpacing: -0.5,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _waterTemp == null ? "Mataas ang temperatura." : _tempDescription,
+            style: GoogleFonts.poppins(
+              fontSize: 10.5,
+              color: _tempColor == textMuted ? const Color(0xFFDC2626) : _tempColor,
+              height: 1.3,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFEE2E2),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: const Color(0xFFEF4444).withOpacity(0.35),
+                width: 1,
+              ),
+            ),
+            child: Text(
+              _tempStatus == 'WALANG DATA' ? "MATAAS" : _tempStatus,
+              style: GoogleFonts.poppins(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: _tempColor == textMuted ? const Color(0xFFDC2626) : _tempColor,
+                letterSpacing: 0.5,
+              ),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildStatusSubcard(String label, String value) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              label.toUpperCase(),
-              style: GoogleFonts.poppins(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: Colors.white.withOpacity(0.8),
-                letterSpacing: 0.5,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              value,
-              style: GoogleFonts.poppins(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  // ── ADDITIONAL PARAMETERS SECTION ──────────────────────────────────────
 
-  Widget _buildUrgentTasksSection() {
+  Widget _buildAdditionalParametersSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            Icon(
-              _hasAlerts ? Icons.assignment_late : Icons.assignment_turned_in,
-              color: _hasAlerts ? warningRed : teal,
-              size: 22,
+            Container(
+              width: 4,
+              height: 18,
+              decoration: BoxDecoration(
+                color: teal,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
             const SizedBox(width: 8),
             Text(
-              "Mahahalagang Gawain",
+              "Iba Pang Kondisyon",
               style: GoogleFonts.poppins(
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
-                color: textDark,
+                color: const Color(0xFF1E293B),
+                letterSpacing: -0.2,
               ),
             ),
-            if (_hasAlerts) ...[
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(
-                  color: warningRed,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  '${_activeAlerts.length}',
-                  style: GoogleFonts.poppins(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ],
           ],
         ),
         const SizedBox(height: 12),
-        if (!_hasAlerts)
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: teal.withOpacity(0.3), width: 1.5),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.check_circle_outline, color: teal, size: 20),
-                const SizedBox(width: 12),
-                Text(
-                  "Walang mahahalagang gawain ngayon.",
-                  style: GoogleFonts.poppins(fontSize: 14, color: textMuted),
-                ),
-              ],
-            ),
-          )
-        else
-          Column(
-            children: _activeAlerts.map((alert) {
-              final String title = (alert['title'] as String?) ?? 'Babala';
-              final String message = (alert['message'] as String?) ?? '';
-              final String priority =
-                  ((alert['priority'] as String?) ?? 'URGENT').toUpperCase();
-              final bool isHigh = priority == 'HIGH' || priority == 'URGENT';
-              final Color alertColor = isHigh
-                  ? warningRed
-                  : const Color(0xFFF59E0B);
-
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: alertColor.withOpacity(0.3),
-                      width: 1.5,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: alertColor.withOpacity(0.05),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: alertColor.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Icon(
-                          Icons.warning_amber_rounded,
-                          color: alertColor,
-                          size: 24,
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    title,
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w700,
-                                      color: textDark,
-                                    ),
-                                  ),
-                                ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: alertColor,
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: Text(
-                                    priority,
-                                    style: GoogleFonts.poppins(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w700,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            if (message.isNotEmpty) ...[
-                              const SizedBox(height: 4),
-                              Text(
-                                message,
-                                style: GoogleFonts.poppins(
-                                  fontSize: 13,
-                                  color: textMuted,
-                                ),
-                              ),
-                            ],
-                            const SizedBox(height: 12),
-                            GestureDetector(
-                              onTap: () {
-                                setState(() {
-                                  _currentNavIndex = 1;
-                                });
-                                _isNavBarVisible.value = true;
-                              },
-                              child: Text(
-                                "Tingnan ang gawain →",
-                                style: GoogleFonts.poppins(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                  color: teal,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }).toList(),
-          ),
+        _buildConditionCard(
+          Icons.water_drop_outlined,
+          "Linis ng Tubig",
+          _turbidityDescription,
+          _turbidityStatus,
+          _turbidityColor,
+          value: _turbidity != null
+              ? '${_turbidity!.toStringAsFixed(0)} NTU'
+              : null,
+        ),
+        const SizedBox(height: 12),
+        _buildConditionCard(
+          Icons.eco_outlined,
+          "Mga Halaman",
+          "Malusog at patuloy na lumalaki.",
+          _plantHealth.toUpperCase(),
+          const Color(0xFF10B981),
+        ),
       ],
-    );
-  }
-
-  Widget _buildYieldSection() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.withOpacity(0.2)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: tealLight,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(Icons.scale, color: tealDark, size: 20),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                "Inaasahang Ani",
-                style: GoogleFonts.poppins(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: textDark,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Text(
-            _yieldDisplay,
-            style: GoogleFonts.poppins(
-              fontSize: 36,
-              fontWeight: FontWeight.w800,
-              color: tealDark,
-              letterSpacing: -1.0,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            "Base sa kasalukuyang kondisyon at dami ng ulang.",
-            style: GoogleFonts.poppins(
-              fontSize: 14,
-              color: textMuted,
-              height: 1.4,
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -1237,13 +1563,16 @@ class _DashboardPageState extends State<DashboardPage>
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.withOpacity(0.2)),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: const Color(0xFFE2E8F0),
+          width: 1.2,
+        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.02),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
           ),
         ],
       ),
@@ -1251,15 +1580,15 @@ class _DashboardPageState extends State<DashboardPage>
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Container(
-            width: 48,
-            height: 48,
+            width: 44,
+            height: 44,
             decoration: BoxDecoration(
-              color: themeColor.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(10),
+              color: themeColor.withOpacity(0.12),
+              shape: BoxShape.circle,
             ),
-            child: Icon(icon, color: themeColor, size: 24),
+            child: Icon(icon, color: themeColor, size: 22),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1269,9 +1598,9 @@ class _DashboardPageState extends State<DashboardPage>
                     Text(
                       title,
                       style: GoogleFonts.poppins(
-                        fontSize: 16,
+                        fontSize: 15,
                         fontWeight: FontWeight.w600,
-                        color: textDark,
+                        color: const Color(0xFF1E293B),
                       ),
                     ),
                     if (value != null) ...[
@@ -1287,18 +1616,21 @@ class _DashboardPageState extends State<DashboardPage>
                     ],
                   ],
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 3),
                 Text(
                   description,
-                  style: GoogleFonts.poppins(fontSize: 13, color: textMuted),
+                  style: GoogleFonts.poppins(
+                    fontSize: 12.5,
+                    color: const Color(0xFF64748B),
+                  ),
                 ),
               ],
             ),
           ),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
-              color: themeColor.withOpacity(0.1),
+              color: themeColor.withOpacity(0.12),
               borderRadius: BorderRadius.circular(20),
             ),
             child: Text(
