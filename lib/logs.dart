@@ -157,12 +157,14 @@ class _LogsPageState extends State<LogsPage>
   }
 
   Future<void> _recalculateAndUpdateGrowthIndicators() async {
+    debugPrint('[recalc] entered _recalculateAndUpdateGrowthIndicators');
     try {
       final indicatorsSnap = await FirebaseFirestore.instance
           .collection('growth_indicators')
           .orderBy('timestamp', descending: true)
           .limit(1)
           .get();
+      debugPrint('[recalc] growth_indicators docs found: ${indicatorsSnap.docs.length}');
 
       if (indicatorsSnap.docs.isEmpty) return;
 
@@ -170,47 +172,13 @@ class _LogsPageState extends State<LogsPage>
       final data = indicatorDoc.data() as Map<String, dynamic>;
       final initialStock = (data['initialStock'] as num?)?.toDouble() ?? 0;
       final cycleStartTs = data['cycleStart'] as Timestamp?;
+      debugPrint('[recalc] initialStock=$initialStock, cycleStartTs=$cycleStartTs');
 
       if (cycleStartTs == null) return;
       final cycleStart = cycleStartTs.toDate();
+      debugPrint('[recalc] cycleStart=$cycleStart');
 
       final updates = <String, dynamic>{};
-
-      final recordsSnap = await FirebaseFirestore.instance
-          .collection('ulang_growth_records')
-          .where(
-            'createdAt',
-            isGreaterThanOrEqualTo: Timestamp.fromDate(cycleStart),
-          )
-          .get();
-
-      double? avgWeight;
-      if (recordsSnap.docs.isNotEmpty) {
-        final now = DateTime.now();
-        final currentWeek = _weekNumberFor(now, cycleStart);
-        for (int week = currentWeek; week >= 1; week--) {
-          final weekDocs = recordsSnap.docs.where((doc) {
-            final ts =
-                (doc.data() as Map<String, dynamic>)['createdAt'] as Timestamp?;
-            if (ts == null) return false;
-            return _weekNumberFor(ts.toDate(), cycleStart) == week;
-          }).toList();
-          if (weekDocs.isNotEmpty) {
-            double totalWeight = 0;
-            for (final doc in weekDocs) {
-              totalWeight +=
-                  ((doc.data() as Map<String, dynamic>)['weight'] as num?)
-                      ?.toDouble() ??
-                  0;
-            }
-            avgWeight = totalWeight / weekDocs.length;
-            break;
-          }
-        }
-      }
-      if (avgWeight != null) {
-        updates['avgWeightPerPiece'] = avgWeight;
-      }
 
       final mortalitySnap = await FirebaseFirestore.instance
           .collection('mortality_records')
@@ -223,26 +191,19 @@ class _LogsPageState extends State<LogsPage>
       for (final doc in mortalitySnap.docs) {
         totalDeaths += ((doc.data()['deathCount'] as num?)?.toInt() ?? 0);
       }
+      debugPrint('[recalc] mortality_records docs found: ${mortalitySnap.docs.length}, totalDeaths=$totalDeaths');
       double? survivalRate;
       if (initialStock > 0) {
         survivalRate = (((initialStock - totalDeaths) / initialStock) * 100)
             .clamp(0, 100);
         updates['survivalRate'] = survivalRate;
       }
+      debugPrint('[recalc] survivalRate computed=$survivalRate');
 
-      final effectiveAvgWeight =
-          avgWeight ?? (data['avgWeightPerPiece'] as num?)?.toDouble() ?? 0;
-      final effectiveSurvival =
-          survivalRate ?? (data['survivalRate'] as num?)?.toDouble() ?? 0;
-      if (initialStock > 0 && effectiveSurvival > 0) {
-        updates['expectedYield'] =
-            initialStock *
-            (effectiveSurvival / 100) *
-            (effectiveAvgWeight / 1000);
-      }
-
+      debugPrint('[recalc] updates map to write: $updates');
       if (updates.isNotEmpty) {
         await indicatorDoc.reference.update(updates);
+        debugPrint('[recalc] update() succeeded');
       }
     } catch (e) {
       debugPrint('Failed to recalculate growth indicators: $e');
