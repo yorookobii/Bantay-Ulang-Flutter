@@ -390,8 +390,8 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   String get _yieldDisplay => _expectedYield != null
-      ? '${_expectedYield!.toStringAsFixed(0)} kg'
-      : '2 kg';
+      ? '${_expectedYield!.toStringAsFixed(1)} kg'
+      : '--';
 
   // ── BUILD ──────────────────────────────────────────────────────────────
 
