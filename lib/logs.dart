@@ -362,6 +362,20 @@ class _LogsPageState extends State<LogsPage>
         'createdAt': FieldValue.serverTimestamp(),
       });
 
+      final logger = await _currentLoggerIdentity();
+      await FirebaseFirestore.instance.collection('logs').add({
+        'title': 'Mortality Log',
+        'description': 'Namatay: $deathCount ulang • Linggo: $weekNumber',
+        'type': 'mortality',
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdBy': uid,
+        'createdByName': logger.name,
+        'createdByEmail': logger.email,
+        'deathCount': deathCount,
+        'weekNumber': weekNumber,
+        'observedAt': Timestamp.fromDate(DateTime.now()),
+      });
+
       await _recalculateAndUpdateGrowthIndicators();
 
       mortalityController.clear();
