@@ -31,6 +31,8 @@ class _DashboardPageState extends State<DashboardPage>
   final List<int> _navHistory = [];
   bool _showNotificationDropdown = false;
   final ValueNotifier<bool> _isNavBarVisible = ValueNotifier(true);
+  Offset? _pointerDownPosition;
+  DateTime? _pointerDownTime;
   late AnimationController _fadeController;
 
   // Live data from sensor_readings
@@ -393,6 +395,93 @@ class _DashboardPageState extends State<DashboardPage>
       ? '${_expectedYield!.toStringAsFixed(1)} kg'
       : '--';
 
+  String? _extractMeasurementFromAlerts(List<String> keywords) {
+    for (final alert in _displayAlerts) {
+      final msg = ((alert['message'] as String?) ?? '');
+      final title = ((alert['title'] as String?) ?? '');
+      final fullText = '$title $msg'.toLowerCase();
+
+      final matchesAny =
+          keywords.any((k) => fullText.contains(k.toLowerCase()));
+      if (matchesAny) {
+        final currentMatch = RegExp(
+          r'current:\s*([0-9]+(?:\.[0-9]+)?(?:\s*[a-zA-Z/%°]+)?)',
+          caseSensitive: false,
+        ).firstMatch(msg);
+        if (currentMatch != null) {
+          final val = currentMatch.group(1)?.trim();
+          if (val != null && val.isNotEmpty) return val;
+        }
+
+        final unitMatch = RegExp(
+          r'([0-9]+(?:\.[0-9]+)?\s*(?:ppt|ppm|NTU|mg/L|°C|g/L|PSU))',
+          caseSensitive: false,
+        ).firstMatch(msg);
+        if (unitMatch != null) {
+          final val = unitMatch.group(1)?.trim();
+          if (val != null && val.isNotEmpty) return val;
+        }
+      }
+    }
+    return null;
+  }
+
+  bool _hasAlertFor(List<String> keywords) {
+    for (final alert in _displayAlerts) {
+      final msg = ((alert['message'] as String?) ?? '').toLowerCase();
+      final title = ((alert['title'] as String?) ?? '').toLowerCase();
+      if (keywords.any(
+        (k) => msg.contains(k.toLowerCase()) || title.contains(k.toLowerCase()),
+      )) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  String get _salinityDisplay {
+    final fromAlert =
+        _extractMeasurementFromAlerts(['salinity', 'tds', 'alat', 'asin']);
+    if (fromAlert != null) return fromAlert;
+    if (_salinity != null) return '${_salinity!.toStringAsFixed(1)} ppt';
+    return '35 ppt';
+  }
+
+  String get _salinityStatusText {
+    if (_hasAlertFor(['salinity', 'tds', 'alat', 'asin'])) return 'BABALA';
+    if (_salinity == null) return 'NORMAL';
+    if (_salinity! > 15.0) return 'MATAAS';
+    if (_salinity! < 0.5) return 'MABABA';
+    return 'NORMAL';
+  }
+
+  Color get _salinityStatusColor {
+    if (_hasAlertFor(['salinity', 'tds', 'alat', 'asin'])) return warningRed;
+    if (_salinity == null) return teal;
+    if (_salinity! > 15.0 || _salinity! < 0.5) return warningRed;
+    return teal;
+  }
+
+  String get _turbidityDisplay {
+    final fromAlert =
+        _extractMeasurementFromAlerts(['turbidity', 'labo', 'linis', 'ntu']);
+    if (fromAlert != null) return fromAlert;
+    if (_turbidity != null) return '${_turbidity!.toStringAsFixed(0)} NTU';
+    return '12 NTU';
+  }
+
+  String get _turbidityBadgeText {
+    if (_hasAlertFor(['turbidity', 'labo', 'linis', 'ntu'])) return 'BABALA';
+    if (_turbidity == null) return 'MALINAW';
+    return _turbidityStatus == 'WALANG DATA' ? 'MALINAW' : _turbidityStatus;
+  }
+
+  Color get _turbidityBadgeColor {
+    if (_hasAlertFor(['turbidity', 'labo', 'linis', 'ntu'])) return warningRed;
+    if (_turbidity == null) return teal;
+    return _turbidityColor == textMuted ? teal : _turbidityColor;
+  }
+
   // ── BUILD ──────────────────────────────────────────────────────────────
 
   void _onNavTapped(int index) {
@@ -430,52 +519,85 @@ class _DashboardPageState extends State<DashboardPage>
         backgroundColor: const Color(0xFFF8FAFC),
         extendBody: true,
         appBar: _buildTopBar(context),
-        body: NotificationListener<ScrollNotification>(
-          onNotification: (ScrollNotification notification) {
-            if (notification.depth != 0) return false;
-            if (notification is UserScrollNotification) {
-              if (notification.direction == ScrollDirection.reverse) {
-                if (_isNavBarVisible.value) _isNavBarVisible.value = false;
-              } else if (notification.direction == ScrollDirection.forward) {
-                if (!_isNavBarVisible.value) _isNavBarVisible.value = true;
+        body: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (event) {
+            _pointerDownPosition = event.position;
+            _pointerDownTime = DateTime.now();
+          },
+          onPointerUp: (event) {
+            if (_showNotificationDropdown) return;
+            if (_pointerDownPosition != null && _pointerDownTime != null) {
+              final distance =
+                  (event.position - _pointerDownPosition!).distance;
+              final elapsed = DateTime.now().difference(_pointerDownTime!);
+              // True tap/click (not a drag or scroll gesture) - toggle visibility
+              if (distance < 18 && elapsed.inMilliseconds < 600) {
+                _isNavBarVisible.value = !_isNavBarVisible.value;
               }
             }
-            if (notification.metrics.pixels >=
-                notification.metrics.maxScrollExtent - 20) {
-              if (!_isNavBarVisible.value) _isNavBarVisible.value = true;
-            }
-            return false;
           },
-          child: Stack(
-            children: [
-              IndexedStack(
-                index: _currentNavIndex,
-                children: [
-                  _buildDashboardView(),
-                  const TasksPage(),
-                  YieldEstimationPage(
-                    onGrowthData: (expectedYield, shrimpHealth, plantHealth) {
-                      if (!mounted) return;
-                      setState(() {
-                        _expectedYield = expectedYield;
-                        _shrimpHealth = shrimpHealth;
-                        _plantHealth = plantHealth;
-                      });
-                    },
-                  ),
-                  const LogsPage(),
-                ],
-              ),
-              if (_showNotificationDropdown)
-                Positioned(
-                  top: 0,
-                  right: 12,
-                  child: TapRegion(
-                    groupId: 'notification-dropdown',
-                    child: _buildNotificationDropdown(),
-                  ),
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (ScrollNotification notification) {
+              // Only react to vertical scrolling (ignores horizontal swipes in tabs)
+              if (notification.metrics.axis != Axis.vertical) return false;
+              if (_showNotificationDropdown) return false;
+
+              if (notification is UserScrollNotification) {
+                if (notification.direction == ScrollDirection.reverse) {
+                  if (_isNavBarVisible.value) _isNavBarVisible.value = false;
+                } else if (notification.direction == ScrollDirection.forward) {
+                  if (!_isNavBarVisible.value) _isNavBarVisible.value = true;
+                }
+              } else if (notification is ScrollUpdateNotification) {
+                final delta = notification.scrollDelta ?? 0;
+                if (delta < -4) {
+                  // Scrolling up: reveal navbar
+                  if (!_isNavBarVisible.value) _isNavBarVisible.value = true;
+                } else if (delta > 4) {
+                  // Scrolling down: hide navbar
+                  if (_isNavBarVisible.value) _isNavBarVisible.value = false;
+                }
+              }
+
+              if (notification.metrics.maxScrollExtent > 20 &&
+                  notification.metrics.pixels >=
+                      notification.metrics.maxScrollExtent - 20) {
+                if (!_isNavBarVisible.value) _isNavBarVisible.value = true;
+              }
+              return false;
+            },
+            child: Stack(
+              children: [
+                IndexedStack(
+                  index: _currentNavIndex,
+                  children: [
+                    _buildDashboardView(),
+                    const TasksPage(),
+                    YieldEstimationPage(
+                      onGrowthData: (expectedYield, shrimpHealth, plantHealth) {
+                        if (!mounted) return;
+                        setState(() {
+                          _expectedYield = expectedYield;
+                          _shrimpHealth = shrimpHealth;
+                          _plantHealth = plantHealth;
+                        });
+                      },
+                    ),
+                    const LogsPage(),
+                  ],
                 ),
-            ],
+                if (_showNotificationDropdown)
+                  Positioned(
+                    top: 0,
+                    right: 12,
+                    child: TapRegion(
+                      groupId: 'notification-dropdown',
+                      child: _buildNotificationDropdown(),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
         bottomNavigationBar: ValueListenableBuilder<bool>(
@@ -971,6 +1093,19 @@ class _DashboardPageState extends State<DashboardPage>
               Expanded(child: _buildOxygenMiniCard()),
               const SizedBox(width: 12),
               Expanded(child: _buildTempMiniCard()),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Row 3: Salinity / TDS & Turbidity
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: _buildSalinityMiniCard()),
+              const SizedBox(width: 12),
+              Expanded(child: _buildTurbidityMiniCard()),
             ],
           ),
         ),
@@ -1500,6 +1635,213 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
+  // Card 5: Salinity / TDS
+  Widget _buildSalinityMiniCard() {
+    final salinityVal = _salinityDisplay;
+    final isAlert = _salinityStatusColor == warningRed;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: const Color(0xFFE2E8F0),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFE0F2FE),
+                  shape: BoxShape.circle,
+                ),
+                child: const Center(
+                  child: Icon(
+                    Icons.opacity_rounded,
+                    size: 17,
+                    color: Color(0xFF0284C7),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  "Salinity / TDS",
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: const Color(0xFF475569),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            salinityVal,
+            style: GoogleFonts.poppins(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: const Color(0xFF1E293B),
+              letterSpacing: -0.5,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+            decoration: BoxDecoration(
+              color: isAlert
+                  ? const Color(0xFFFEE2E2)
+                  : const Color(0xFFECFDF5),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: isAlert
+                    ? const Color(0xFFEF4444).withOpacity(0.35)
+                    : const Color(0xFF10B981).withOpacity(0.35),
+                width: 1,
+              ),
+            ),
+            child: Text(
+              _salinityStatusText,
+              style: GoogleFonts.poppins(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: isAlert
+                    ? const Color(0xFFDC2626)
+                    : const Color(0xFF059669),
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Card 6: Turbidity
+  Widget _buildTurbidityMiniCard() {
+    final turbidityVal = _turbidityDisplay;
+    final isAlert = _turbidityBadgeColor == warningRed;
+    final isWarning = _turbidityBadgeColor == const Color(0xFFF59E0B);
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: const Color(0xFFE2E8F0),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFE0F2FE),
+                  shape: BoxShape.circle,
+                ),
+                child: const Center(
+                  child: Icon(
+                    Icons.blur_on_rounded,
+                    size: 17,
+                    color: Color(0xFF0284C7),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  "Turbidity",
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: const Color(0xFF475569),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            turbidityVal,
+            style: GoogleFonts.poppins(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: const Color(0xFF1E293B),
+              letterSpacing: -0.5,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+            decoration: BoxDecoration(
+              color: isAlert
+                  ? const Color(0xFFFEE2E2)
+                  : (isWarning
+                      ? const Color(0xFFFEF3C7)
+                      : const Color(0xFFECFDF5)),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: isAlert
+                    ? const Color(0xFFEF4444).withOpacity(0.35)
+                    : (isWarning
+                        ? const Color(0xFFF59E0B).withOpacity(0.35)
+                        : const Color(0xFF10B981).withOpacity(0.35)),
+                width: 1,
+              ),
+            ),
+            child: Text(
+              _turbidityBadgeText,
+              style: GoogleFonts.poppins(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: isAlert
+                    ? const Color(0xFFDC2626)
+                    : (isWarning
+                        ? const Color(0xFFD97706)
+                        : const Color(0xFF059669)),
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ── ADDITIONAL PARAMETERS SECTION ──────────────────────────────────────
 
   Widget _buildAdditionalParametersSection() {
@@ -1527,17 +1869,6 @@ class _DashboardPageState extends State<DashboardPage>
               ),
             ),
           ],
-        ),
-        const SizedBox(height: 12),
-        _buildConditionCard(
-          Icons.water_drop_outlined,
-          "Linis ng Tubig",
-          _turbidityDescription,
-          _turbidityStatus,
-          _turbidityColor,
-          value: _turbidity != null
-              ? '${_turbidity!.toStringAsFixed(0)} NTU'
-              : null,
         ),
         const SizedBox(height: 12),
         _buildConditionCard(

@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -37,6 +37,19 @@ class _LogsPageState extends State<LogsPage>
   // New mortality records state
   List<QueryDocumentSnapshot> _mortalityRecords = [];
   StreamSubscription<QuerySnapshot>? _mortalityRecordsSub;
+
+  // Growth indicators state for cycle tracking
+  DateTime? _cycleStart;
+  StreamSubscription<QuerySnapshot>? _indicatorsSub;
+
+  // Weekly growth chart state
+  int? _selectedWeekIndex;
+  bool _showAllWeeks = false;
+  bool _isRefreshingChart = false;
+
+  // See More state for lists
+  bool _showAllMortality = false;
+  bool _showAllUlangLogs = false;
 
   // Ulang form controllers
   final sizeController = TextEditingController();
@@ -87,6 +100,7 @@ class _LogsPageState extends State<LogsPage>
     _subscribeLogs();
     _subscribeGrowthRecords();
     _subscribeMortalityRecords();
+    _subscribeGrowthIndicators();
   }
 
   void _subscribeLogs() {
@@ -150,6 +164,77 @@ class _LogsPageState extends State<LogsPage>
           onError: (error) =>
               debugPrint('Mortality records subscription error: $error'),
         );
+  }
+
+  void _subscribeGrowthIndicators() {
+    _indicatorsSub = FirebaseFirestore.instance
+        .collection('growth_indicators')
+        .orderBy('timestamp', descending: true)
+        .limit(1)
+        .snapshots()
+        .listen(
+          (snapshot) {
+            if (!mounted) return;
+            if (snapshot.docs.isNotEmpty) {
+              final data = snapshot.docs.first.data();
+              final cycleStartTs = data['cycleStart'] as Timestamp?;
+              setState(() {
+                _cycleStart = cycleStartTs?.toDate();
+              });
+            }
+          },
+          onError: (error) =>
+              debugPrint('Growth indicators subscription error: $error'),
+        );
+  }
+
+  Future<void> _refreshAllData() async {
+    if (_isRefreshingChart) return;
+    setState(() => _isRefreshingChart = true);
+    try {
+      final recordsSnap = await FirebaseFirestore.instance
+          .collection('ulang_growth_records')
+          .orderBy('createdAt', descending: true)
+          .get();
+
+      final indicatorsSnap = await FirebaseFirestore.instance
+          .collection('growth_indicators')
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .get();
+
+      final logsSnap = await FirebaseFirestore.instance
+          .collection('logs')
+          .orderBy('createdAt', descending: true)
+          .get();
+
+      if (!mounted) return;
+      setState(() {
+        _ulangGrowthRecords = recordsSnap.docs;
+        _ulangLogs = logsSnap.docs.where((d) {
+          final data = d.data() as Map<String, dynamic>;
+          return data['type'] == 'ulang';
+        }).toList();
+        _plantLogs = logsSnap.docs.where((d) {
+          final data = d.data() as Map<String, dynamic>;
+          return data['type'] == 'plant';
+        }).toList();
+        if (indicatorsSnap.docs.isNotEmpty) {
+          final data = indicatorsSnap.docs.first.data();
+          final cycleStartTs = data['cycleStart'] as Timestamp?;
+          _cycleStart = cycleStartTs?.toDate();
+        }
+        _selectedWeekIndex = null;
+      });
+      _showSuccessSnackbar("Matagumpay na na-refresh ang graph at mga tala.");
+    } catch (e) {
+      debugPrint('Error refreshing data: $e');
+      if (mounted) {
+        _showErrorSnackbar("Hindi ma-refresh ang data. Subukan muli.");
+      }
+    } finally {
+      if (mounted) setState(() => _isRefreshingChart = false);
+    }
   }
 
   int _weekNumberFor(DateTime date, DateTime cycleStart) {
@@ -254,6 +339,7 @@ class _LogsPageState extends State<LogsPage>
     _logsSub?.cancel();
     _growthRecordsSub?.cancel();
     _mortalityRecordsSub?.cancel();
+    _indicatorsSub?.cancel();
     _fadeController.dispose();
     sizeController.dispose();
     weightController.dispose();
@@ -526,36 +612,78 @@ class _LogsPageState extends State<LogsPage>
     return 'Hindi matukoy';
   }
 
-  List<Map<String, dynamic>> getWeeklyWeightData() {
-    final current = DateTime.now();
-    final today = DateTime(current.year, current.month, current.day);
-    return List.generate(4, (i) {
-      final weekEnd = today.subtract(Duration(days: (3 - i) * 7));
-      final weekStart = weekEnd.subtract(const Duration(days: 6));
-      double total = 0;
-      int count = 0;
-      DateTime? latestObservation;
+  List<Map<String, dynamic>> getWeeklyGrowthData() {
+    if (_ulangGrowthRecords.isEmpty) return [];
+
+    // Determine cycle start baseline
+    DateTime? cycleStart = _cycleStart;
+    if (cycleStart == null) {
+      DateTime? earliest;
       for (final doc in _ulangGrowthRecords) {
         final data = doc.data() as Map<String, dynamic>;
         final ts = (data['observedAt'] ?? data['createdAt']) as Timestamp?;
-        if (ts == null) continue;
-        final rawDate = ts.toDate();
-        final date = DateTime(rawDate.year, rawDate.month, rawDate.day);
-        if (!date.isBefore(weekStart) && !date.isAfter(weekEnd)) {
-          total += (data['weight'] as num?)?.toDouble() ?? 0;
-          count++;
-          if (latestObservation == null || date.isAfter(latestObservation)) {
-            latestObservation = date;
+        if (ts != null) {
+          final d = ts.toDate();
+          if (earliest == null || d.isBefore(earliest)) {
+            earliest = d;
           }
         }
       }
+      if (earliest != null) {
+        cycleStart = DateTime(earliest.year, earliest.month, earliest.day);
+      }
+    }
+
+    if (cycleStart == null) return [];
+
+    final Map<int, List<({double weight, DateTime date})>> weekBuckets = {};
+
+    for (final doc in _ulangGrowthRecords) {
+      final data = doc.data() as Map<String, dynamic>;
+      final ts = (data['observedAt'] ?? data['createdAt']) as Timestamp?;
+      if (ts == null) continue;
+      final rawDate = ts.toDate();
+      final date = DateTime(rawDate.year, rawDate.month, rawDate.day);
+      int weekNum = _weekNumberFor(date, cycleStart);
+      if (weekNum < 1) weekNum = 1;
+
+      final weight = (data['weight'] as num?)?.toDouble();
+      if (weight == null || weight <= 0) continue;
+
+      weekBuckets.putIfAbsent(weekNum, () => []).add((weight: weight, date: date));
+    }
+
+    if (weekBuckets.isEmpty) return [];
+
+    final sortedWeekNumbers = weekBuckets.keys.toList()..sort();
+
+    return sortedWeekNumbers.map((weekNum) {
+      final records = weekBuckets[weekNum]!;
+      final double totalWeight = records.fold(0.0, (acc, r) => acc + r.weight);
+      final int count = records.length;
+      final double avgWeight = count > 0 ? (totalWeight / count) : 0.0;
+
+      final weekStart = cycleStart!.add(Duration(days: (weekNum - 1) * 7));
+      final weekEnd = weekStart.add(const Duration(days: 6));
+
+      DateTime? latestDate;
+      for (final r in records) {
+        if (latestDate == null || r.date.isAfter(latestDate)) {
+          latestDate = r.date;
+        }
+      }
+
       return {
-        'label': _formatDateRange(weekStart, weekEnd),
-        'total': total,
+        'weekNumber': weekNum,
+        'label': 'W$weekNum',
+        'longLabel': 'Linggo $weekNum',
+        'avgWeight': avgWeight,
+        'totalWeight': totalWeight,
         'count': count,
-        'latestObservation': latestObservation,
+        'dateRange': _formatDateRange(weekStart, weekEnd),
+        'latestObservation': latestDate,
       };
-    });
+    }).toList();
   }
 
   String _formatShortDate(DateTime date) {
@@ -577,15 +705,19 @@ class _LogsPageState extends State<LogsPage>
   }
 
   void _showSuccessSnackbar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
           children: [
             const Icon(Icons.check_circle, color: Colors.white),
             const SizedBox(width: 12),
-            Text(
-              message,
-              style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
+            Expanded(
+              child: Text(
+                message,
+                style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
+              ),
             ),
           ],
         ),
@@ -598,6 +730,8 @@ class _LogsPageState extends State<LogsPage>
   }
 
   void _showErrorSnackbar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -719,34 +853,32 @@ class _LogsPageState extends State<LogsPage>
   // =======================
 
   Widget _buildUlangTab() {
-    final weeklyData = getWeeklyWeightData();
-    final maxWeight = weeklyData
-        .map((e) => e['total'] as double)
-        .fold(0.0, max);
+    final weeklyGrowthData = getWeeklyGrowthData();
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 100),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildHeader(
-            "Tala ng Ulang",
-            "I-record ang sukat at timbang ng mga ulang.",
-          ),
-          const SizedBox(height: 24),
-
-          _statCard("Kabuuang Tala", _ulangLogs.length.toString(), Icons.pets),
-          const SizedBox(height: 24),
-
-          if (_ulangLogs.isNotEmpty) ...[
-            _buildLatestUlangLogSummary(_ulangLogs.first),
+    return RefreshIndicator(
+      color: teal,
+      onRefresh: _refreshAllData,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 24, 16, 100),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildHeader(
+              "Tala ng Ulang",
+              "I-record ang sukat at timbang ng mga ulang.",
+            ),
             const SizedBox(height: 24),
-          ],
 
-          _buildSectionTitle("Lingguhang Timbang"),
-          const SizedBox(height: 12),
-          _buildChartCard(weeklyData, maxWeight),
-          const SizedBox(height: 24),
+            _buildSectionTitle("Lingguhang Paglaki"),
+            const SizedBox(height: 12),
+            _buildWeeklyGrowthChartCard(weeklyGrowthData),
+            const SizedBox(height: 24),
+
+            if (_ulangLogs.isNotEmpty) ...[
+              _buildLatestUlangLogSummary(_ulangLogs.first),
+              const SizedBox(height: 24),
+            ],
 
           _buildSectionTitle("Magdagdag ng Tala"),
           const SizedBox(height: 12),
@@ -761,19 +893,36 @@ class _LogsPageState extends State<LogsPage>
           if (_mortalityRecords.isNotEmpty) ...[
             _buildSectionTitle("Mga Nakaraang Tala ng Mortality"),
             const SizedBox(height: 12),
-            ..._mortalityRecords.map(_buildMortalityLogCard),
+            ...(_showAllMortality
+                    ? _mortalityRecords
+                    : _mortalityRecords.take(3))
+                .map(_buildMortalityLogCard),
+            if (_mortalityRecords.length > 3)
+              _buildSeeMoreButton(
+                isExpanded: _showAllMortality,
+                totalCount: _mortalityRecords.length,
+                onTap: () => setState(() => _showAllMortality = !_showAllMortality),
+              ),
             const SizedBox(height: 24),
           ],
 
           if (_ulangLogs.isNotEmpty) ...[
             _buildSectionTitle("Mga Nakaraang Tala ng Ulang"),
             const SizedBox(height: 12),
-            ..._ulangLogs.map(_buildUlangLogCard),
+            ...(_showAllUlangLogs ? _ulangLogs : _ulangLogs.take(3))
+                .map(_buildUlangLogCard),
+            if (_ulangLogs.length > 3)
+              _buildSeeMoreButton(
+                isExpanded: _showAllUlangLogs,
+                totalCount: _ulangLogs.length,
+                onTap: () => setState(() => _showAllUlangLogs = !_showAllUlangLogs),
+              ),
           ],
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   // =======================
   // Plant Tab UI
@@ -781,6 +930,7 @@ class _LogsPageState extends State<LogsPage>
 
   Widget _buildPlantTab() {
     return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 24, 16, 100),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -836,6 +986,47 @@ class _LogsPageState extends State<LogsPage>
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildSeeMoreButton({
+    required bool isExpanded,
+    required int totalCount,
+    required VoidCallback onTap,
+  }) {
+    final hiddenCount = totalCount - 3;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.only(top: 6, bottom: 6),
+        child: OutlinedButton.icon(
+          onPressed: onTap,
+          icon: Icon(
+            isExpanded
+                ? Icons.keyboard_arrow_up_rounded
+                : Icons.keyboard_arrow_down_rounded,
+            size: 20,
+            color: tealDark,
+          ),
+          label: Text(
+            isExpanded
+                ? "See Less"
+                : "See More (+$hiddenCount)",
+            style: GoogleFonts.poppins(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: tealDark,
+            ),
+          ),
+          style: OutlinedButton.styleFrom(
+            backgroundColor: Colors.white,
+            side: BorderSide(color: teal.withValues(alpha: 0.35)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          ),
+        ),
+      ),
     );
   }
 
@@ -906,83 +1097,302 @@ class _LogsPageState extends State<LogsPage>
     );
   }
 
-  Widget _buildChartCard(
-    List<Map<String, dynamic>> weeklyData,
-    double maxWeight,
-  ) {
+  Widget _buildWeeklyGrowthChartCard(List<Map<String, dynamic>> allWeeks) {
+    if (allWeeks.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.grey.withValues(alpha: 0.2)),
+        ),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: tealLight,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(Icons.show_chart_rounded, color: tealDark, size: 32),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              "Wala pang naitalang lingguhang paglaki",
+              style: GoogleFonts.poppins(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: textDark,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              "Magtala ng sukat at timbang ng ulang sa ibaba upang makita ang linya ng paglaki kada linggo.",
+              textAlign: TextAlign.center,
+              style: GoogleFonts.poppins(
+                fontSize: 13,
+                color: textMuted,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Show latest 3 weeks by default if there are more than 3 weeks
+    final bool hasMoreThanThree = allWeeks.length > 3;
+    final List<Map<String, dynamic>> displayedWeeks = (hasMoreThanThree && !_showAllWeeks)
+        ? allWeeks.sublist(allWeeks.length - 3)
+        : allWeeks;
+
+    final int selectedIndex = (_selectedWeekIndex != null &&
+            _selectedWeekIndex! >= 0 &&
+            _selectedWeekIndex! < displayedWeeks.length)
+        ? _selectedWeekIndex!
+        : (displayedWeeks.length - 1);
+
+    final selectedWeek = displayedWeeks[selectedIndex];
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.withOpacity(0.2)),
+        border: Border.all(color: Colors.grey.withValues(alpha: 0.2)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
-        children: weeklyData.map((d) {
-          final pct = maxWeight > 0 ? d['total'] / maxWeight : 0.0;
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header with Title, ABW Subtitle, and Optional Toggle
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: tealLight,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(Icons.insights_rounded, color: tealDark, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      "Lingguhang Paglaki",
+                      style: GoogleFonts.poppins(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: textDark,
+                      ),
+                    ),
+                    Text(
+                      "Overall Weight in Grams",
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        color: textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Dedicated Refresh Button
+              InkWell(
+                onTap: _isRefreshingChart ? null : () => _refreshAllData(),
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: tealLight,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: teal.withValues(alpha: 0.3)),
+                  ),
+                  child: _isRefreshingChart
+                      ? SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: tealDark,
+                          ),
+                        )
+                      : Icon(
+                          Icons.refresh_rounded,
+                          size: 16,
+                          color: tealDark,
+                        ),
+                ),
+              ),
+              if (hasMoreThanThree) const SizedBox(width: 8),
+              if (hasMoreThanThree)
+                InkWell(
+                  onTap: () {
+                    setState(() {
+                      _showAllWeeks = !_showAllWeeks;
+                      _selectedWeekIndex = null;
+                    });
+                  },
+                  borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: _showAllWeeks ? tealDark : tealLight,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: teal.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _showAllWeeks ? Icons.filter_alt_outlined : Icons.history_rounded,
+                          size: 13,
+                          color: _showAllWeeks ? Colors.white : tealDark,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          _showAllWeeks ? "Huling 3" : "Lahat (${allWeeks.length})",
+                          style: GoogleFonts.poppins(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: _showAllWeeks ? Colors.white : tealDark,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          // Active Selected Week Badge
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: tealLight,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: teal.withValues(alpha: 0.25)),
+            ),
             child: Row(
               children: [
-                SizedBox(
-                  width: 92,
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: tealDark,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    selectedWeek['label'],
+                    style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        d['label'],
+                        "${selectedWeek['longLabel']} (${selectedWeek['dateRange']})",
                         style: GoogleFonts.poppins(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
                           color: textDark,
                         ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                       Text(
-                        '${d['count']} tala',
+                        "${selectedWeek['count']} ${selectedWeek['count'] == 1 ? 'tala' : 'mga tala'} • Ave: ${(selectedWeek['avgWeight'] as double).toStringAsFixed(1)} g",
                         style: GoogleFonts.poppins(
-                          fontSize: 10,
+                          fontSize: 11,
                           color: textMuted,
                         ),
                       ),
                     ],
                   ),
                 ),
-                Expanded(
-                  child: Container(
-                    height: 28,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF3F4F6),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: FractionallySizedBox(
-                      alignment: Alignment.centerLeft,
-                      widthFactor: pct > 0 ? pct : 0.01,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: pct > 0 ? teal : Colors.transparent,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                SizedBox(
-                  width: 60,
-                  child: Text(
-                    "${(d['total'] as double).toStringAsFixed(1)} g",
-                    textAlign: TextAlign.right,
-                    style: GoogleFonts.poppins(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: tealDark,
-                    ),
+                Text(
+                  "${(selectedWeek['totalWeight'] as double).toStringAsFixed(1)} g",
+                  style: GoogleFonts.poppins(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: tealDark,
                   ),
                 ),
               ],
             ),
-          );
-        }).toList(),
+          ),
+          const SizedBox(height: 16),
+
+          // Chart Canvas with GestureDetector for interactive touch/tap
+          LayoutBuilder(
+            builder: (context, constraints) {
+              const double chartHeight = 170.0;
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTapDown: (details) {
+                  const double leftPad = 38.0;
+                  const double rightPad = 24.0;
+                  final double usableWidth = constraints.maxWidth - leftPad - rightPad;
+                  if (displayedWeeks.length == 1) {
+                    setState(() => _selectedWeekIndex = 0);
+                  } else if (displayedWeeks.length > 1) {
+                    final double step = usableWidth / (displayedWeeks.length - 1);
+                    final double localX = details.localPosition.dx - leftPad;
+                    final int tappedIndex = (localX / step).round().clamp(0, displayedWeeks.length - 1);
+                    setState(() => _selectedWeekIndex = tappedIndex);
+                  }
+                },
+                child: SizedBox(
+                  width: double.infinity,
+                  height: chartHeight,
+                  child: CustomPaint(
+                    size: Size(constraints.maxWidth, chartHeight),
+                    painter: WeeklyGrowthLinePainter(
+                      data: displayedWeeks,
+                      selectedIndex: selectedIndex,
+                      tealColor: teal,
+                      tealDarkColor: tealDark,
+                      textDarkColor: textDark,
+                      textMutedColor: textMuted,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 8),
+
+          // Helpful interactive caption
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.touch_app_outlined, size: 13, color: textMuted),
+              const SizedBox(width: 4),
+              Text(
+                "Pindutin ang mga punto sa linya upang makita ang detalye",
+                style: GoogleFonts.poppins(
+                  fontSize: 11,
+                  color: textMuted,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -1531,5 +1941,221 @@ Widget _buildPlantLogCard(QueryDocumentSnapshot doc) {
         ],
       ),
     );
+  }
+}
+
+class WeeklyGrowthLinePainter extends CustomPainter {
+  final List<Map<String, dynamic>> data;
+  final int selectedIndex;
+  final Color tealColor;
+  final Color tealDarkColor;
+  final Color textDarkColor;
+  final Color textMutedColor;
+
+  WeeklyGrowthLinePainter({
+    required this.data,
+    required this.selectedIndex,
+    required this.tealColor,
+    required this.tealDarkColor,
+    required this.textDarkColor,
+    required this.textMutedColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (data.isEmpty || size.width <= 0 || size.height <= 0) return;
+
+    const double leftPad = 38.0;
+    const double rightPad = 24.0;
+    const double topPad = 26.0;
+    const double bottomPad = 28.0;
+
+    final double chartWidth = size.width - leftPad - rightPad;
+    final double chartHeight = size.height - topPad - bottomPad;
+    final double chartBottom = topPad + chartHeight;
+
+    // Calculate max weight for Y-axis scale
+    double maxVal = 0.0;
+    for (final d in data) {
+      final w = (d['totalWeight'] as num).toDouble();
+      if (w > maxVal) maxVal = w;
+    }
+
+    double maxY = maxVal > 0 ? maxVal * 1.3 : 20.0;
+    if (maxY <= 10) {
+      maxY = 10.0;
+    } else if (maxY <= 50) {
+      maxY = (maxY / 10).ceil() * 10.0;
+    } else {
+      maxY = (maxY / 25).ceil() * 25.0;
+    }
+
+    // Horizontal guidelines at 3 levels: 0, maxY/2, maxY
+    final gridPaint = Paint()
+      ..color = const Color(0xFFE5E7EB)
+      ..strokeWidth = 1.0;
+
+    final double midY = topPad + (chartHeight / 2);
+    canvas.drawLine(Offset(leftPad, topPad), Offset(size.width - rightPad, topPad), gridPaint);
+    canvas.drawLine(Offset(leftPad, midY), Offset(size.width - rightPad, midY), gridPaint);
+    canvas.drawLine(Offset(leftPad, chartBottom), Offset(size.width - rightPad, chartBottom), gridPaint);
+
+    // Y-Axis numeric labels
+    _drawYAxisLabel(canvas, "${maxY.toStringAsFixed(0)}g", Offset(leftPad - 6, topPad));
+    _drawYAxisLabel(canvas, "${(maxY / 2).toStringAsFixed(0)}g", Offset(leftPad - 6, midY));
+    _drawYAxisLabel(canvas, "0g", Offset(leftPad - 6, chartBottom));
+
+    // Compute coordinate points
+    final List<Offset> points = [];
+    if (data.length == 1) {
+      final double x = leftPad + (chartWidth / 2);
+      final double weight = (data[0]['totalWeight'] as num).toDouble();
+      final double y = chartBottom - ((weight / maxY) * chartHeight).clamp(0.0, chartHeight);
+      points.add(Offset(x, y));
+    } else {
+      final double step = chartWidth / (data.length - 1);
+      for (int i = 0; i < data.length; i++) {
+        final double x = leftPad + (i * step);
+        final double weight = (data[i]['totalWeight'] as num).toDouble();
+        final double y = chartBottom - ((weight / maxY) * chartHeight).clamp(0.0, chartHeight);
+        points.add(Offset(x, y));
+      }
+    }
+
+    // Multiple points: draw smooth Bezier curve and subtle gradient fill
+    if (points.length >= 2) {
+      final path = Path();
+      path.moveTo(points[0].dx, points[0].dy);
+
+      for (int i = 0; i < points.length - 1; i++) {
+        final p0 = points[i];
+        final p1 = points[i + 1];
+        final cp1 = Offset(p0.dx + (p1.dx - p0.dx) / 2, p0.dy);
+        final cp2 = Offset(p0.dx + (p1.dx - p0.dx) / 2, p1.dy);
+        path.cubicTo(cp1.dx, cp1.dy, cp2.dx, cp2.dy, p1.dx, p1.dy);
+      }
+
+      // Gradient area fill
+      final fillPath = Path.from(path)
+        ..lineTo(points.last.dx, chartBottom)
+        ..lineTo(points.first.dx, chartBottom)
+        ..close();
+
+      final fillPaint = Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(0, topPad),
+          Offset(0, chartBottom),
+          [
+            tealColor.withValues(alpha: 0.28),
+            tealColor.withValues(alpha: 0.0),
+          ],
+        );
+      canvas.drawPath(fillPath, fillPaint);
+
+      // Smooth line stroke
+      final linePaint = Paint()
+        ..color = tealColor
+        ..strokeWidth = 3.0
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round;
+      canvas.drawPath(path, linePaint);
+    }
+
+    // Draw individual nodes and X-axis week titles
+    for (int i = 0; i < points.length; i++) {
+      final p = points[i];
+      final isSelected = (i == selectedIndex);
+      final labelText = data[i]['label'] as String; // "W1", "W2", "W3"
+
+      // X-Axis Week Title
+      _drawXAxisLabel(canvas, labelText, Offset(p.dx, chartBottom + 6), isSelected);
+
+      if (isSelected) {
+        // Glowing halo for selected active node
+        canvas.drawCircle(p, 12, Paint()..color = tealColor.withValues(alpha: 0.20));
+        canvas.drawCircle(p, 7, Paint()..color = Colors.white);
+        canvas.drawCircle(p, 4.5, Paint()..color = tealDarkColor);
+
+        // Value text bubble above node
+        final double total = (data[i]['totalWeight'] as num).toDouble();
+        _drawValueBubble(canvas, "${total.toStringAsFixed(1)}g", Offset(p.dx, p.dy - 12));
+      } else {
+        // Inactive standard node
+        canvas.drawCircle(p, 5, Paint()..color = Colors.white);
+        canvas.drawCircle(p, 3.5, Paint()..color = tealColor);
+      }
+    }
+  }
+
+  void _drawYAxisLabel(Canvas canvas, String text, Offset rightCenter) {
+    final span = TextSpan(
+      text: text,
+      style: GoogleFonts.poppins(
+        fontSize: 10,
+        fontWeight: FontWeight.w500,
+        color: textMutedColor,
+      ),
+    );
+    final tp = TextPainter(
+      text: span,
+      textDirection: TextDirection.ltr,
+      textAlign: TextAlign.right,
+    )..layout();
+    tp.paint(canvas, Offset(rightCenter.dx - tp.width, rightCenter.dy - (tp.height / 2)));
+  }
+
+  void _drawXAxisLabel(Canvas canvas, String text, Offset topCenter, bool isSelected) {
+    final span = TextSpan(
+      text: text,
+      style: GoogleFonts.poppins(
+        fontSize: 12,
+        fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+        color: isSelected ? tealDarkColor : textMutedColor,
+      ),
+    );
+    final tp = TextPainter(
+      text: span,
+      textDirection: TextDirection.ltr,
+      textAlign: TextAlign.center,
+    )..layout();
+    tp.paint(canvas, Offset(topCenter.dx - (tp.width / 2), topCenter.dy));
+  }
+
+  void _drawValueBubble(Canvas canvas, String text, Offset bottomCenter) {
+    final span = TextSpan(
+      text: text,
+      style: GoogleFonts.poppins(
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+        color: Colors.white,
+      ),
+    );
+    final tp = TextPainter(
+      text: span,
+      textDirection: TextDirection.ltr,
+      textAlign: TextAlign.center,
+    )..layout();
+
+    const double hPad = 6.0;
+    const double vPad = 2.0;
+    final rrect = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+        center: Offset(bottomCenter.dx, bottomCenter.dy - (tp.height / 2)),
+        width: tp.width + (hPad * 2),
+        height: tp.height + (vPad * 2),
+      ),
+      const Radius.circular(6),
+    );
+
+    canvas.drawRRect(rrect, Paint()..color = tealDarkColor);
+    tp.paint(canvas, Offset(bottomCenter.dx - (tp.width / 2), bottomCenter.dy - tp.height - vPad));
+  }
+
+  @override
+  bool shouldRepaint(covariant WeeklyGrowthLinePainter oldDelegate) {
+    return oldDelegate.data != data ||
+        oldDelegate.selectedIndex != selectedIndex ||
+        oldDelegate.tealColor != tealColor;
   }
 }
