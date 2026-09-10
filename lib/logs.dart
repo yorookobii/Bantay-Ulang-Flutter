@@ -50,6 +50,7 @@ class _LogsPageState extends State<LogsPage>
   // See More state for lists
   bool _showAllMortality = false;
   bool _showAllUlangLogs = false;
+  bool _showAllPlantLogs = false;
 
   // Ulang form controllers
   final sizeController = TextEditingController();
@@ -952,7 +953,15 @@ class _LogsPageState extends State<LogsPage>
           if (_plantLogs.isNotEmpty) ...[
             _buildSectionTitle("Mga Nakaraang Tala"),
             const SizedBox(height: 12),
-            ..._plantLogs.map(_buildPlantLogCard),
+            ...(_showAllPlantLogs ? _plantLogs : _plantLogs.take(3))
+                .map(_buildPlantLogCard),
+            if (_plantLogs.length > 3)
+              _buildSeeMoreButton(
+                isExpanded: _showAllPlantLogs,
+                totalCount: _plantLogs.length,
+                onTap: () =>
+                    setState(() => _showAllPlantLogs = !_showAllPlantLogs),
+              ),
           ],
         ],
       ),
