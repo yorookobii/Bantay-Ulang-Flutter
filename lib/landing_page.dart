@@ -11,7 +11,8 @@ import 'profile.dart';
 import 'notification_service.dart';
 
 class DashboardPage extends StatefulWidget {
-  const DashboardPage({super.key});
+  final int initialIndex;
+  const DashboardPage({super.key, this.initialIndex = 0});
 
   @override
   State<DashboardPage> createState() => _DashboardPageState();
@@ -27,7 +28,7 @@ class _DashboardPageState extends State<DashboardPage>
   final Color textDark = const Color(0xFF1F2937);
   final Color textMuted = const Color(0xFF6B7280);
 
-  int _currentNavIndex = 0;
+  late int _currentNavIndex;
   final List<int> _navHistory = [];
   bool _showNotificationDropdown = false;
   final ValueNotifier<bool> _isNavBarVisible = ValueNotifier(true);
@@ -89,6 +90,11 @@ class _DashboardPageState extends State<DashboardPage>
   @override
   void initState() {
     super.initState();
+    _currentNavIndex = widget.initialIndex;
+    if (NotificationService.instance.consumePendingNavigationToTasks()) {
+      _currentNavIndex = 1;
+    }
+    NotificationService.instance.onNavigateToTasks = _navigateToTasksTab;
     _fadeController = AnimationController(
       duration: const Duration(milliseconds: 600),
       vsync: this,
@@ -100,6 +106,18 @@ class _DashboardPageState extends State<DashboardPage>
     _subscribeTasks();
     _loadUserInitials();
     _loadPhThresholds();
+  }
+
+  void _navigateToTasksTab() {
+    if (!mounted) return;
+    _closeNotificationDropdown();
+    final nav = Navigator.maybeOf(context);
+    if (nav != null && nav.canPop()) {
+      nav.popUntil(
+        (route) => route.isFirst || route.settings.name == '/dashboard',
+      );
+    }
+    _onNavTapped(1);
   }
 
   void _subscribeSensorReadings() {
@@ -254,6 +272,9 @@ class _DashboardPageState extends State<DashboardPage>
 
   @override
   void dispose() {
+    if (NotificationService.instance.onNavigateToTasks == _navigateToTasksTab) {
+      NotificationService.instance.onNavigateToTasks = null;
+    }
     _fadeController.dispose();
     _sensorSub?.cancel();
     _alertsSub?.cancel();
@@ -949,14 +970,15 @@ class _DashboardPageState extends State<DashboardPage>
                           .toUpperCase();
                       final bool isHigh = prio == 'HIGH' || prio == 'URGENT';
                       return InkWell(
-                        onTap: isTask
-                            ? () {
-                                setState(
-                                  () => _showNotificationDropdown = false,
-                                );
-                                _onNavTapped(1);
-                              }
-                            : () => _acknowledgeAlert(alert['id'] as String),
+                        onTap: () {
+                          setState(
+                            () => _showNotificationDropdown = false,
+                          );
+                          if (!isTask) {
+                            _acknowledgeAlert(alert['id'] as String);
+                          }
+                          _onNavTapped(1);
+                        },
                         child: _buildNotifItem(
                           isTask
                               ? Icons.assignment_outlined
