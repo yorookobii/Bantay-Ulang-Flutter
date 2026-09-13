@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 enum AuthMessageKind { success, error, warning, info }
 
@@ -31,6 +33,11 @@ class _SignupPageState extends State<SignupPage>
   static const Color _textDark = Color(0xFF1F2937);
   static const Color _textMuted = Color(0xFF6B7280);
 
+  static const int _maxFailedAttempts = 3;
+  static const Duration _lockoutDuration = Duration(minutes: 3);
+  static const String _prefKeyFailedAttempts = 'login_failed_attempts';
+  static const String _prefKeyLockoutUntil = 'login_lockout_until';
+
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
@@ -46,6 +53,13 @@ class _SignupPageState extends State<SignupPage>
   String? _message;
   AuthMessageKind _messageKind = AuthMessageKind.info;
 
+  int _failedAttempts = 0;
+  DateTime? _lockoutUntil;
+  Timer? _lockoutTimer;
+  int _remainingLockoutSeconds = 0;
+
+  bool get _isLockedOut => _remainingLockoutSeconds > 0;
+
   @override
   void initState() {
     super.initState();
@@ -56,10 +70,12 @@ class _SignupPageState extends State<SignupPage>
     _message = widget.initialMessage;
     _messageKind = widget.initialMessageKind;
     _showResendOption = widget.showResendOption;
+    _loadLockoutState();
   }
 
   @override
   void dispose() {
+    _lockoutTimer?.cancel();
     _rippleController.dispose();
     _nameController.dispose();
     _emailController.dispose();
@@ -68,11 +84,140 @@ class _SignupPageState extends State<SignupPage>
     super.dispose();
   }
 
+  Future<void> _loadLockoutState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lockoutMs = prefs.getInt(_prefKeyLockoutUntil);
+      final attempts = prefs.getInt(_prefKeyFailedAttempts) ?? 0;
+      _failedAttempts = attempts;
+      if (lockoutMs != null) {
+        final lockoutDate = DateTime.fromMillisecondsSinceEpoch(lockoutMs);
+        if (lockoutDate.isAfter(DateTime.now())) {
+          _lockoutUntil = lockoutDate;
+          _startLockoutTimer();
+          return;
+        } else {
+          await _clearLockoutPreferences();
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _clearLockoutPreferences() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_prefKeyLockoutUntil);
+      await prefs.remove(_prefKeyFailedAttempts);
+    } catch (_) {}
+  }
+
+  Future<void> _recordFailedAttempt() async {
+    _failedAttempts++;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_prefKeyFailedAttempts, _failedAttempts);
+      if (_failedAttempts >= _maxFailedAttempts) {
+        final lockoutDate = DateTime.now().add(_lockoutDuration);
+        _lockoutUntil = lockoutDate;
+        await prefs.setInt(
+          _prefKeyLockoutUntil,
+          lockoutDate.millisecondsSinceEpoch,
+        );
+        _startLockoutTimer();
+      }
+    } catch (_) {
+      if (_failedAttempts >= _maxFailedAttempts) {
+        _lockoutUntil = DateTime.now().add(_lockoutDuration);
+        _startLockoutTimer();
+      }
+    }
+  }
+
+  Future<void> _resetLockout() async {
+    _failedAttempts = 0;
+    _lockoutUntil = null;
+    _remainingLockoutSeconds = 0;
+    _lockoutTimer?.cancel();
+    _lockoutTimer = null;
+    await _clearLockoutPreferences();
+  }
+
+  void _startLockoutTimer() {
+    _lockoutTimer?.cancel();
+    _updateLockoutState();
+    if (_remainingLockoutSeconds > 0) {
+      _lockoutTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        _updateLockoutState();
+      });
+    }
+  }
+
+  void _updateLockoutState() {
+    if (_lockoutUntil == null) {
+      if (_remainingLockoutSeconds != 0 && mounted) {
+        setState(() {
+          _remainingLockoutSeconds = 0;
+        });
+      }
+      _lockoutTimer?.cancel();
+      _lockoutTimer = null;
+      return;
+    }
+
+    final diffMs = _lockoutUntil!.difference(DateTime.now()).inMilliseconds;
+    if (diffMs <= 0) {
+      _lockoutTimer?.cancel();
+      _lockoutTimer = null;
+      _lockoutUntil = null;
+      _failedAttempts = 0;
+      _clearLockoutPreferences();
+      if (mounted) {
+        setState(() {
+          _remainingLockoutSeconds = 0;
+          if (_isSignIn &&
+              _message != null &&
+              _message!.contains('Naka-lock')) {
+            _message =
+                'Tapos na ang pag-lock. Maaari ka nang mag-log in muli.';
+            _messageKind = AuthMessageKind.info;
+          }
+        });
+      }
+    } else {
+      final seconds = (diffMs / 1000).ceil();
+      if (mounted) {
+        setState(() {
+          _remainingLockoutSeconds = seconds;
+          if (_isSignIn) {
+            _message = _lockoutErrorMessage(seconds);
+            _messageKind = AuthMessageKind.error;
+          }
+        });
+      }
+    }
+  }
+
+  String _formatLockoutDuration(int totalSeconds) {
+    final minutes = totalSeconds ~/ 60;
+    final seconds = totalSeconds % 60;
+    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  String _lockoutErrorMessage(int secondsRemaining) {
+    final formattedTime = _formatLockoutDuration(secondsRemaining);
+    return 'Naka-lock ang iyong account. Subukan muli pagkalipas ng $formattedTime.';
+  }
+
   void _setMode(bool signIn) {
     if (_isLoading || signIn == _isSignIn) return;
     setState(() {
       _isSignIn = signIn;
-      _message = null;
+      if (signIn && _isLockedOut) {
+        _message = _lockoutErrorMessage(_remainingLockoutSeconds);
+        _messageKind = AuthMessageKind.error;
+      } else {
+        _message = null;
+      }
       _showResendOption = false;
       _passwordController.clear();
       _confirmPasswordController.clear();
@@ -90,6 +235,13 @@ class _SignupPageState extends State<SignupPage>
 
   Future<void> _submit() async {
     FocusScope.of(context).unfocus();
+    if (_isSignIn && _isLockedOut) {
+      _setMessage(
+        _lockoutErrorMessage(_remainingLockoutSeconds),
+        AuthMessageKind.error,
+      );
+      return;
+    }
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() {
       _isLoading = true;
@@ -104,11 +256,19 @@ class _SignupPageState extends State<SignupPage>
   }
 
   Future<void> _signIn() async {
+    if (_isLockedOut) {
+      _setMessage(
+        _lockoutErrorMessage(_remainingLockoutSeconds),
+        AuthMessageKind.error,
+      );
+      return;
+    }
     try {
       final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
+      await _resetLockout();
       final user = credential.user!;
       await user.reload();
       final refreshed = FirebaseAuth.instance.currentUser;
@@ -150,7 +310,28 @@ class _SignupPageState extends State<SignupPage>
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/dashboard');
     } on FirebaseAuthException catch (error) {
-      _setMessage(_authErrorMessage(error.code), AuthMessageKind.error);
+      final isWrongCredential = error.code == 'user-not-found' ||
+          error.code == 'wrong-password' ||
+          error.code == 'invalid-credential' ||
+          error.code == 'invalid-login-credentials' ||
+          error.code == 'invalid-email';
+      if (isWrongCredential) {
+        await _recordFailedAttempt();
+        if (_isLockedOut) {
+          _setMessage(
+            _lockoutErrorMessage(_remainingLockoutSeconds),
+            AuthMessageKind.error,
+          );
+        } else {
+          final attemptsLeft = _maxFailedAttempts - _failedAttempts;
+          _setMessage(
+            '${_authErrorMessage(error.code)} May $attemptsLeft ${attemptsLeft == 1 ? 'pagsubok' : 'mga pagsubok'} na lang bago ma-lock ang pag-log in nang 3 minuto.',
+            AuthMessageKind.error,
+          );
+        }
+      } else {
+        _setMessage(_authErrorMessage(error.code), AuthMessageKind.error);
+      }
     } catch (_) {
       _setMessage(
         'Hindi makapag-log in ngayon. Subukan muli.',
@@ -209,6 +390,13 @@ class _SignupPageState extends State<SignupPage>
   }
 
   Future<void> _resendVerification() async {
+    if (_isLockedOut) {
+      _setMessage(
+        _lockoutErrorMessage(_remainingLockoutSeconds),
+        AuthMessageKind.error,
+      );
+      return;
+    }
     if (_emailController.text.trim().isEmpty ||
         _passwordController.text.isEmpty) {
       _setMessage(
@@ -223,6 +411,7 @@ class _SignupPageState extends State<SignupPage>
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
+      await _resetLockout();
       await credential.user!.sendEmailVerification();
       await FirebaseAuth.instance.signOut();
       _setMessage(
@@ -230,7 +419,28 @@ class _SignupPageState extends State<SignupPage>
         AuthMessageKind.success,
       );
     } on FirebaseAuthException catch (error) {
-      _setMessage(_authErrorMessage(error.code), AuthMessageKind.error);
+      final isWrongCredential = error.code == 'user-not-found' ||
+          error.code == 'wrong-password' ||
+          error.code == 'invalid-credential' ||
+          error.code == 'invalid-login-credentials' ||
+          error.code == 'invalid-email';
+      if (isWrongCredential) {
+        await _recordFailedAttempt();
+        if (_isLockedOut) {
+          _setMessage(
+            _lockoutErrorMessage(_remainingLockoutSeconds),
+            AuthMessageKind.error,
+          );
+        } else {
+          final attemptsLeft = _maxFailedAttempts - _failedAttempts;
+          _setMessage(
+            '${_authErrorMessage(error.code)} May $attemptsLeft ${attemptsLeft == 1 ? 'pagsubok' : 'mga pagsubok'} na lang bago ma-lock ang pag-log in nang 3 minuto.',
+            AuthMessageKind.error,
+          );
+        }
+      } else {
+        _setMessage(_authErrorMessage(error.code), AuthMessageKind.error);
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -432,7 +642,9 @@ class _SignupPageState extends State<SignupPage>
                 textInputAction: _isSignIn
                     ? TextInputAction.done
                     : TextInputAction.next,
-                onFieldSubmitted: _isSignIn ? (_) => _submit() : null,
+                onFieldSubmitted: (_isSignIn && _isLockedOut)
+                    ? null
+                    : (_isSignIn ? (_) => _submit() : null),
               ),
               if (!_isSignIn) ...[
                 const SizedBox(height: 7),
@@ -488,12 +700,16 @@ class _SignupPageState extends State<SignupPage>
                   ],
                 ),
                 child: ElevatedButton(
-                  onPressed: _isLoading ? null : _submit,
+                  onPressed: (_isLoading || (_isSignIn && _isLockedOut))
+                      ? null
+                      : _submit,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.transparent,
                     shadowColor: Colors.transparent,
                     foregroundColor: Colors.white,
                     disabledBackgroundColor: _teal.withValues(alpha: 0.55),
+                    disabledForegroundColor:
+                        Colors.white.withValues(alpha: 0.85),
                     elevation: 0,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14),
@@ -509,7 +725,11 @@ class _SignupPageState extends State<SignupPage>
                           ),
                         )
                       : Text(
-                          _isSignIn ? 'Log in' : 'Create an Account',
+                          _isSignIn
+                              ? (_isLockedOut
+                                  ? 'Locked (${_formatLockoutDuration(_remainingLockoutSeconds)})'
+                                  : 'Log in')
+                              : 'Create an Account',
                           style: GoogleFonts.poppins(
                             fontSize: 15,
                             fontWeight: FontWeight.w700,
