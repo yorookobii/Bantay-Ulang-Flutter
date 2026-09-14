@@ -44,6 +44,14 @@ class _DashboardPageState extends State<DashboardPage>
   double? _turbidity;
   double? _waterLevel;
 
+  // Sensor refresh and tracking state
+  String? _lastSensorDocId;
+  Timestamp? _lastSensorTimestamp;
+  DateTime? _lastSensorRefreshTime;
+  bool _isRefreshingSensor = false;
+  bool _isCheckingNewData = false;
+  DateTime? _lastScrollRefreshCheck;
+
   // pH threshold configuration (user-defined per farm)
   double _phMin = 6.8;
   double _phMax = 8.0;
@@ -132,7 +140,12 @@ class _DashboardPageState extends State<DashboardPage>
           (snapshot) {
             if (!mounted) return;
             if (snapshot.docs.isEmpty) return;
-            final data = snapshot.docs.first.data() as Map<String, dynamic>;
+            final doc = snapshot.docs.first;
+            final data = doc.data();
+            final ts = data['timestamp'] as Timestamp?;
+            _lastSensorDocId = doc.id;
+            if (ts != null) _lastSensorTimestamp = ts;
+            _lastSensorRefreshTime = DateTime.now();
             setState(() {
               _waterTemp = (data['waterTemp'] as num?)?.toDouble();
               _phLevel = (data['phLevel'] as num?)?.toDouble();
@@ -145,6 +158,231 @@ class _DashboardPageState extends State<DashboardPage>
           onError: (error) =>
               debugPrint('Sensor readings subscription error: $error'),
         );
+  }
+
+  bool _hasSensorDataChanged(Map<String, dynamic> data) {
+    final wTemp = (data['waterTemp'] as num?)?.toDouble();
+    final ph = (data['phLevel'] as num?)?.toDouble();
+    final dOx = (data['dissolvedOxygen'] as num?)?.toDouble();
+    final sal = (data['salinity'] as num?)?.toDouble();
+    final turb = (data['turbidity'] as num?)?.toDouble();
+    final wLevel = (data['waterLevel'] as num?)?.toDouble();
+
+    return wTemp != _waterTemp ||
+        ph != _phLevel ||
+        dOx != _dissolvedOxygen ||
+        sal != _salinity ||
+        turb != _turbidity ||
+        wLevel != _waterLevel;
+  }
+
+  void _applySensorData(String docId, Timestamp? ts, Map<String, dynamic> data) {
+    _lastSensorDocId = docId;
+    if (ts != null) _lastSensorTimestamp = ts;
+    _lastSensorRefreshTime = DateTime.now();
+    setState(() {
+      _waterTemp = (data['waterTemp'] as num?)?.toDouble();
+      _phLevel = (data['phLevel'] as num?)?.toDouble();
+      _dissolvedOxygen = (data['dissolvedOxygen'] as num?)?.toDouble();
+      _salinity = (data['salinity'] as num?)?.toDouble();
+      _turbidity = (data['turbidity'] as num?)?.toDouble();
+      _waterLevel = (data['waterLevel'] as num?)?.toDouble();
+    });
+  }
+
+  Future<void> _refreshGrowthIndicators() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('growth_indicators')
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .get(const GetOptions(source: Source.serverAndCache));
+      if (!mounted || snapshot.docs.isEmpty) return;
+      final data = snapshot.docs.first.data();
+      final rfYield = (data['rfProjectedYield'] as num?)?.toDouble() ??
+          (data['expectedYield'] as num?)?.toDouble();
+      final sHealth = (data['shrimpHealth'] as String?) ?? 'Malusog';
+      final pHealth = (data['plantHealth'] as String?) ?? 'Maayos';
+      setState(() {
+        if (rfYield != null && rfYield > 0) {
+          _expectedYield = rfYield;
+        }
+        _shrimpHealth = sHealth;
+        _plantHealth = pHealth;
+      });
+    } catch (e) {
+      debugPrint('Growth indicators refresh error: $e');
+    }
+  }
+
+  Future<void> _refreshAlerts() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('alerts')
+          .where('status', isEqualTo: 'active')
+          .get(const GetOptions(source: Source.serverAndCache));
+      if (!mounted) return;
+      setState(() {
+        _activeAlerts = snapshot.docs.map((doc) {
+          return {'id': doc.id, ...doc.data()};
+        }).toList();
+      });
+    } catch (e) {
+      debugPrint('Alerts refresh error: $e');
+    }
+  }
+
+  Future<void> _refreshSensorData({bool isPullToRefresh = false}) async {
+    if (_isRefreshingSensor) return;
+    setState(() => _isRefreshingSensor = true);
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('sensor_readings')
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .get(const GetOptions(source: Source.serverAndCache));
+
+      if (!mounted) return;
+
+      bool hasNewData = false;
+      if (snapshot.docs.isNotEmpty) {
+        final doc = snapshot.docs.first;
+        final docId = doc.id;
+        final data = doc.data();
+        final ts = data['timestamp'] as Timestamp?;
+
+        final isNewDoc = _lastSensorDocId != null && _lastSensorDocId != docId;
+        final isNewTimestamp = _lastSensorTimestamp != null &&
+            ts != null &&
+            ts.compareTo(_lastSensorTimestamp!) > 0;
+        final isDataChanged = _hasSensorDataChanged(data);
+
+        hasNewData = isNewDoc || isNewTimestamp || isDataChanged;
+        _applySensorData(docId, ts, data);
+      }
+
+      await Future.wait([
+        _refreshGrowthIndicators(),
+        _refreshAlerts(),
+      ]);
+
+      if (!mounted) return;
+
+      if (isPullToRefresh) {
+        if (hasNewData) {
+          _showDashboardFeedbackSnackbar(
+            "Na-refresh: May bagong datos ng sensor na naitala.",
+            isSuccess: true,
+          );
+        } else {
+          _showDashboardFeedbackSnackbar(
+            "Napapanahon ang datos ng sensor.",
+            isSuccess: true,
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Error refreshing sensor data: $e');
+      if (mounted && isPullToRefresh) {
+        _showDashboardFeedbackSnackbar(
+          "Hindi ma-refresh ang datos ng sensor. Subukan muli.",
+          isSuccess: false,
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isRefreshingSensor = false);
+      } else {
+        _isRefreshingSensor = false;
+      }
+    }
+  }
+
+  void _onDashboardScrolledDown() {
+    if (_currentNavIndex != 0) return;
+    if (_isRefreshingSensor || _isCheckingNewData) return;
+
+    final now = DateTime.now();
+    if (_lastScrollRefreshCheck != null &&
+        now.difference(_lastScrollRefreshCheck!).inSeconds < 10) {
+      return;
+    }
+    _lastScrollRefreshCheck = now;
+    _checkNewSensorDataOnScroll();
+  }
+
+  Future<void> _checkNewSensorDataOnScroll() async {
+    if (_isCheckingNewData) return;
+    _isCheckingNewData = true;
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('sensor_readings')
+          .orderBy('timestamp', descending: true)
+          .limit(1)
+          .get(const GetOptions(source: Source.serverAndCache));
+
+      if (!mounted || snapshot.docs.isEmpty) return;
+
+      final doc = snapshot.docs.first;
+      final docId = doc.id;
+      final data = doc.data();
+      final ts = data['timestamp'] as Timestamp?;
+
+      final isNewDoc = _lastSensorDocId != null && _lastSensorDocId != docId;
+      final isNewTimestamp = _lastSensorTimestamp != null &&
+          ts != null &&
+          ts.compareTo(_lastSensorTimestamp!) > 0;
+      final isDataChanged = _hasSensorDataChanged(data);
+
+      if (isNewDoc || isNewTimestamp || isDataChanged) {
+        _applySensorData(docId, ts, data);
+        _showDashboardFeedbackSnackbar(
+          "May bagong datos ng sensor na naitala.",
+          isSuccess: true,
+        );
+      }
+    } catch (e) {
+      debugPrint('Scroll check sensor data error: $e');
+    } finally {
+      _isCheckingNewData = false;
+    }
+  }
+
+  void _showDashboardFeedbackSnackbar(
+    String message, {
+    bool isSuccess = true,
+  }) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              isSuccess ? Icons.check_circle_outline : Icons.error_outline,
+              color: Colors.white,
+              size: 20,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                message,
+                style: GoogleFonts.poppins(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: isSuccess ? tealDark : warningRed,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        duration: const Duration(milliseconds: 2500),
+      ),
+    );
   }
 
   void _subscribeAlerts() {
@@ -663,6 +901,9 @@ class _DashboardPageState extends State<DashboardPage>
               if (notification is UserScrollNotification) {
                 if (notification.direction == ScrollDirection.reverse) {
                   if (_isNavBarVisible.value) _isNavBarVisible.value = false;
+                  if (_currentNavIndex == 0) {
+                    _onDashboardScrolledDown();
+                  }
                 } else if (notification.direction == ScrollDirection.forward) {
                   if (!_isNavBarVisible.value) _isNavBarVisible.value = true;
                 }
@@ -674,6 +915,9 @@ class _DashboardPageState extends State<DashboardPage>
                 } else if (delta > 4) {
                   // Scrolling down: hide navbar
                   if (_isNavBarVisible.value) _isNavBarVisible.value = false;
+                  if (_currentNavIndex == 0) {
+                    _onDashboardScrolledDown();
+                  }
                 }
               }
 
@@ -743,20 +987,27 @@ class _DashboardPageState extends State<DashboardPage>
           begin: 0,
           end: 1,
         ).animate(CurvedAnimation(parent: _fadeController, curve: Curves.easeIn)),
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildGreetingHeader(),
-              const SizedBox(height: 18),
-              // Living Assets (Ulang & Plants) + Water Parameters
-              _buildWaterParametersSection(),
-              const SizedBox(height: 22),
-              // Babala warning notifications
-              _buildUrgentTasksSection(),
-            ],
+        child: RefreshIndicator(
+          key: const Key('dashboard_refresh_indicator'),
+          color: teal,
+          backgroundColor: Colors.white,
+          displacement: 40,
+          onRefresh: () => _refreshSensorData(isPullToRefresh: true),
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildGreetingHeader(),
+                const SizedBox(height: 18),
+                // Living Assets (Ulang & Plants) + Water Parameters
+                _buildWaterParametersSection(),
+                const SizedBox(height: 22),
+                // Babala warning notifications
+                _buildUrgentTasksSection(),
+              ],
+            ),
           ),
         ),
       ),
