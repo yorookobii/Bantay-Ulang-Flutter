@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -6,6 +7,19 @@ class NotificationService {
   NotificationService._();
 
   static final NotificationService instance = NotificationService._();
+  static final GlobalKey<NavigatorState> navigatorKey =
+      GlobalKey<NavigatorState>();
+
+  VoidCallback? onNavigateToTasks;
+  bool _pendingNavigationToTasks = false;
+
+  bool consumePendingNavigationToTasks() {
+    if (_pendingNavigationToTasks) {
+      _pendingNavigationToTasks = false;
+      return true;
+    }
+    return false;
+  }
 
   static const AndroidNotificationChannel _alertsChannel =
       AndroidNotificationChannel(
@@ -43,7 +57,19 @@ class NotificationService {
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       iOS: DarwinInitializationSettings(),
     );
-    await _plugin.initialize(settings);
+    await _plugin.initialize(
+      settings,
+      onDidReceiveNotificationResponse: _onNotificationTapped,
+    );
+
+    final launchDetails = await _plugin.getNotificationAppLaunchDetails();
+    if (launchDetails?.didNotificationLaunchApp ?? false) {
+      final payload = launchDetails?.notificationResponse?.payload;
+      if (payload != null &&
+          (payload.startsWith('task:') || payload.startsWith('alert:'))) {
+        _pendingNavigationToTasks = true;
+      }
+    }
 
     if (defaultTargetPlatform == TargetPlatform.android) {
       final android = _plugin.resolvePlatformSpecificImplementation<
@@ -56,6 +82,27 @@ class NotificationService {
           .resolvePlatformSpecificImplementation<
               IOSFlutterLocalNotificationsPlugin>()
           ?.requestPermissions(alert: true, badge: true, sound: true);
+    }
+  }
+
+  void _onNotificationTapped(NotificationResponse response) {
+    final payload = response.payload;
+    if (payload == null) return;
+    if (payload.startsWith('task:') || payload.startsWith('alert:')) {
+      navigateToTasks();
+    }
+  }
+
+  void navigateToTasks() {
+    if (onNavigateToTasks != null) {
+      onNavigateToTasks!();
+      return;
+    }
+
+    _pendingNavigationToTasks = true;
+    final navigator = navigatorKey.currentState;
+    if (navigator != null) {
+      navigator.pushNamedAndRemoveUntil('/dashboard', (route) => false);
     }
   }
 

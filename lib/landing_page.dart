@@ -11,7 +11,8 @@ import 'profile.dart';
 import 'notification_service.dart';
 
 class DashboardPage extends StatefulWidget {
-  const DashboardPage({super.key});
+  final int initialIndex;
+  const DashboardPage({super.key, this.initialIndex = 0});
 
   @override
   State<DashboardPage> createState() => _DashboardPageState();
@@ -27,10 +28,12 @@ class _DashboardPageState extends State<DashboardPage>
   final Color textDark = const Color(0xFF1F2937);
   final Color textMuted = const Color(0xFF6B7280);
 
-  int _currentNavIndex = 0;
+  late int _currentNavIndex;
   final List<int> _navHistory = [];
   bool _showNotificationDropdown = false;
   final ValueNotifier<bool> _isNavBarVisible = ValueNotifier(true);
+  Offset? _pointerDownPosition;
+  DateTime? _pointerDownTime;
   late AnimationController _fadeController;
 
   // Live data from sensor_readings
@@ -83,10 +86,16 @@ class _DashboardPageState extends State<DashboardPage>
   StreamSubscription<QuerySnapshot>? _sensorSub;
   StreamSubscription<QuerySnapshot>? _alertsSub;
   StreamSubscription<QuerySnapshot>? _tasksSub;
+  StreamSubscription<QuerySnapshot>? _growthSub;
 
   @override
   void initState() {
     super.initState();
+    _currentNavIndex = widget.initialIndex;
+    if (NotificationService.instance.consumePendingNavigationToTasks()) {
+      _currentNavIndex = 1;
+    }
+    NotificationService.instance.onNavigateToTasks = _navigateToTasksTab;
     _fadeController = AnimationController(
       duration: const Duration(milliseconds: 600),
       vsync: this,
@@ -96,8 +105,21 @@ class _DashboardPageState extends State<DashboardPage>
     _subscribeSensorReadings();
     _subscribeAlerts();
     _subscribeTasks();
+    _subscribeGrowthIndicators();
     _loadUserInitials();
     _loadPhThresholds();
+  }
+
+  void _navigateToTasksTab() {
+    if (!mounted) return;
+    _closeNotificationDropdown();
+    final nav = Navigator.maybeOf(context);
+    if (nav != null && nav.canPop()) {
+      nav.popUntil(
+        (route) => route.isFirst || route.settings.name == '/dashboard',
+      );
+    }
+    _onNavTapped(1);
   }
 
   void _subscribeSensorReadings() {
@@ -190,6 +212,34 @@ class _DashboardPageState extends State<DashboardPage>
         }, onError: (error) => debugPrint('Tasks subscription error: $error'));
   }
 
+  void _subscribeGrowthIndicators() {
+    _growthSub = FirebaseFirestore.instance
+        .collection('growth_indicators')
+        .orderBy('timestamp', descending: true)
+        .limit(1)
+        .snapshots()
+        .listen(
+          (snapshot) {
+            if (!mounted) return;
+            if (snapshot.docs.isEmpty) return;
+            final data = snapshot.docs.first.data() as Map<String, dynamic>;
+            final rfYield = (data['rfProjectedYield'] as num?)?.toDouble() ??
+                (data['expectedYield'] as num?)?.toDouble();
+            final sHealth = (data['shrimpHealth'] as String?) ?? 'Malusog';
+            final pHealth = (data['plantHealth'] as String?) ?? 'Maayos';
+            setState(() {
+              if (rfYield != null && rfYield > 0) {
+                _expectedYield = rfYield;
+              }
+              _shrimpHealth = sHealth;
+              _plantHealth = pHealth;
+            });
+          },
+          onError: (error) =>
+              debugPrint('Growth indicators subscription error: $error'),
+        );
+  }
+
   Future<void> _loadUserInitials() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -252,10 +302,14 @@ class _DashboardPageState extends State<DashboardPage>
 
   @override
   void dispose() {
+    if (NotificationService.instance.onNavigateToTasks == _navigateToTasksTab) {
+      NotificationService.instance.onNavigateToTasks = null;
+    }
     _fadeController.dispose();
     _sensorSub?.cancel();
     _alertsSub?.cancel();
     _tasksSub?.cancel();
+    _growthSub?.cancel();
     _isNavBarVisible.dispose();
     super.dispose();
   }
@@ -349,7 +403,6 @@ class _DashboardPageState extends State<DashboardPage>
     return teal;
   }
 
-  bool get _hasAlerts => _displayAlerts.isNotEmpty;
   int get _notificationCount {
     final alerts = _displayAlerts;
     final unread = alerts.where((alert) {
@@ -378,20 +431,173 @@ class _DashboardPageState extends State<DashboardPage>
     unawaited(NotificationService.instance.cancelNotification(key));
   }
 
-  String get _systemStatusTitle =>
-      _hasAlerts ? 'May Babala' : 'Mabuti ang Kalagayan';
-
-  String get _systemStatusDescription {
-    if (_hasAlerts) {
-      return (_displayAlerts.first['message'] as String?) ??
-          'May aktibong babala. Suriin ang sistema agad.';
+  String get _yieldDisplay {
+    if (_expectedYield != null && _expectedYield! > 0) {
+      return '${_expectedYield!.toStringAsFixed(1)} kg';
     }
-    return 'Ligtas ang tubig at masigla ang mga ulang at tanim.';
+    if (_expectedYield != null) {
+      return 'Pending';
+    }
+    return '--';
   }
 
-  String get _yieldDisplay => _expectedYield != null
-      ? '${_expectedYield!.toStringAsFixed(1)} kg'
-      : '--';
+  Color get _shrimpHealthColor {
+    final h = _shrimpHealth.toLowerCase();
+    if (h.contains('babala') || h.contains('panganib') || h.contains('delikado')) {
+      return warningRed;
+    }
+    if (h.contains('katamtaman') || h.contains('bantayan')) {
+      return const Color(0xFFD97706);
+    }
+    return const Color(0xFF059669);
+  }
+
+  Color get _shrimpHealthBg {
+    final h = _shrimpHealth.toLowerCase();
+    if (h.contains('babala') || h.contains('panganib') || h.contains('delikado')) {
+      return const Color(0xFFFEE2E2);
+    }
+    if (h.contains('katamtaman') || h.contains('bantayan')) {
+      return const Color(0xFFFEF3C7);
+    }
+    return const Color(0xFFECFDF5);
+  }
+
+  Color get _plantHealthColor {
+    final h = _plantHealth.toLowerCase();
+    if (h.contains('babala') || h.contains('lanta') || h.contains('sakit')) {
+      return warningRed;
+    }
+    if (h.contains('katamtaman') || h.contains('bantayan')) {
+      return const Color(0xFFD97706);
+    }
+    return const Color(0xFF059669);
+  }
+
+  Color get _plantHealthBg {
+    final h = _plantHealth.toLowerCase();
+    if (h.contains('babala') || h.contains('lanta') || h.contains('sakit')) {
+      return const Color(0xFFFEE2E2);
+    }
+    if (h.contains('katamtaman') || h.contains('bantayan')) {
+      return const Color(0xFFFEF3C7);
+    }
+    return const Color(0xFFECFDF5);
+  }
+
+  String get _waterLevelDisplay {
+    final fromAlert =
+        _extractMeasurementFromAlerts(['water level', 'lebel', 'lalim', 'level']);
+    if (fromAlert != null) return fromAlert;
+    if (_waterLevel != null) return '${_waterLevel!.toStringAsFixed(0)} cm';
+    return '95 cm';
+  }
+
+  String get _waterLevelStatusText {
+    if (_hasAlertFor(['water level', 'lebel', 'lalim', 'level'])) {
+      return 'BABALA';
+    }
+    if (_waterLevel == null) return 'NORMAL';
+    if (_waterLevel! < 40.0) return 'MABABA';
+    if (_waterLevel! > 120.0) return 'MATAAS';
+    return 'NORMAL';
+  }
+
+  Color get _waterLevelStatusColor {
+    if (_hasAlertFor(['water level', 'lebel', 'lalim', 'level'])) {
+      return warningRed;
+    }
+    if (_waterLevel == null) return teal;
+    if (_waterLevel! < 40.0 || _waterLevel! > 120.0) return warningRed;
+    return teal;
+  }
+
+  String? _extractMeasurementFromAlerts(List<String> keywords) {
+    for (final alert in _displayAlerts) {
+      final msg = ((alert['message'] as String?) ?? '');
+      final title = ((alert['title'] as String?) ?? '');
+      final fullText = '$title $msg'.toLowerCase();
+
+      final matchesAny =
+          keywords.any((k) => fullText.contains(k.toLowerCase()));
+      if (matchesAny) {
+        final currentMatch = RegExp(
+          r'current:\s*([0-9]+(?:\.[0-9]+)?(?:\s*[a-zA-Z/%°]+)?)',
+          caseSensitive: false,
+        ).firstMatch(msg);
+        if (currentMatch != null) {
+          final val = currentMatch.group(1)?.trim();
+          if (val != null && val.isNotEmpty) return val;
+        }
+
+        final unitMatch = RegExp(
+          r'([0-9]+(?:\.[0-9]+)?\s*(?:ppt|ppm|NTU|mg/L|°C|g/L|PSU))',
+          caseSensitive: false,
+        ).firstMatch(msg);
+        if (unitMatch != null) {
+          final val = unitMatch.group(1)?.trim();
+          if (val != null && val.isNotEmpty) return val;
+        }
+      }
+    }
+    return null;
+  }
+
+  bool _hasAlertFor(List<String> keywords) {
+    for (final alert in _displayAlerts) {
+      final msg = ((alert['message'] as String?) ?? '').toLowerCase();
+      final title = ((alert['title'] as String?) ?? '').toLowerCase();
+      if (keywords.any(
+        (k) => msg.contains(k.toLowerCase()) || title.contains(k.toLowerCase()),
+      )) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  String get _salinityDisplay {
+    final fromAlert =
+        _extractMeasurementFromAlerts(['salinity', 'tds', 'alat', 'asin']);
+    if (fromAlert != null) return fromAlert;
+    if (_salinity != null) return '${_salinity!.toStringAsFixed(1)} ppt';
+    return '35 ppt';
+  }
+
+  String get _salinityStatusText {
+    if (_hasAlertFor(['salinity', 'tds', 'alat', 'asin'])) return 'BABALA';
+    if (_salinity == null) return 'NORMAL';
+    if (_salinity! > 15.0) return 'MATAAS';
+    if (_salinity! < 0.5) return 'MABABA';
+    return 'NORMAL';
+  }
+
+  Color get _salinityStatusColor {
+    if (_hasAlertFor(['salinity', 'tds', 'alat', 'asin'])) return warningRed;
+    if (_salinity == null) return teal;
+    if (_salinity! > 15.0 || _salinity! < 0.5) return warningRed;
+    return teal;
+  }
+
+  String get _turbidityDisplay {
+    final fromAlert =
+        _extractMeasurementFromAlerts(['turbidity', 'labo', 'linis', 'ntu']);
+    if (fromAlert != null) return fromAlert;
+    if (_turbidity != null) return '${_turbidity!.toStringAsFixed(0)} NTU';
+    return '12 NTU';
+  }
+
+  String get _turbidityBadgeText {
+    if (_hasAlertFor(['turbidity', 'labo', 'linis', 'ntu'])) return 'BABALA';
+    if (_turbidity == null) return 'MALINAW';
+    return _turbidityStatus == 'WALANG DATA' ? 'MALINAW' : _turbidityStatus;
+  }
+
+  Color get _turbidityBadgeColor {
+    if (_hasAlertFor(['turbidity', 'labo', 'linis', 'ntu'])) return warningRed;
+    if (_turbidity == null) return teal;
+    return _turbidityColor == textMuted ? teal : _turbidityColor;
+  }
 
   // ── BUILD ──────────────────────────────────────────────────────────────
 
@@ -430,52 +636,85 @@ class _DashboardPageState extends State<DashboardPage>
         backgroundColor: const Color(0xFFF8FAFC),
         extendBody: true,
         appBar: _buildTopBar(context),
-        body: NotificationListener<ScrollNotification>(
-          onNotification: (ScrollNotification notification) {
-            if (notification.depth != 0) return false;
-            if (notification is UserScrollNotification) {
-              if (notification.direction == ScrollDirection.reverse) {
-                if (_isNavBarVisible.value) _isNavBarVisible.value = false;
-              } else if (notification.direction == ScrollDirection.forward) {
-                if (!_isNavBarVisible.value) _isNavBarVisible.value = true;
+        body: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (event) {
+            _pointerDownPosition = event.position;
+            _pointerDownTime = DateTime.now();
+          },
+          onPointerUp: (event) {
+            if (_showNotificationDropdown) return;
+            if (_pointerDownPosition != null && _pointerDownTime != null) {
+              final distance =
+                  (event.position - _pointerDownPosition!).distance;
+              final elapsed = DateTime.now().difference(_pointerDownTime!);
+              // True tap/click (not a drag or scroll gesture) - toggle visibility
+              if (distance < 18 && elapsed.inMilliseconds < 600) {
+                _isNavBarVisible.value = !_isNavBarVisible.value;
               }
             }
-            if (notification.metrics.pixels >=
-                notification.metrics.maxScrollExtent - 20) {
-              if (!_isNavBarVisible.value) _isNavBarVisible.value = true;
-            }
-            return false;
           },
-          child: Stack(
-            children: [
-              IndexedStack(
-                index: _currentNavIndex,
-                children: [
-                  _buildDashboardView(),
-                  const TasksPage(),
-                  YieldEstimationPage(
-                    onGrowthData: (expectedYield, shrimpHealth, plantHealth) {
-                      if (!mounted) return;
-                      setState(() {
-                        _expectedYield = expectedYield;
-                        _shrimpHealth = shrimpHealth;
-                        _plantHealth = plantHealth;
-                      });
-                    },
-                  ),
-                  const LogsPage(),
-                ],
-              ),
-              if (_showNotificationDropdown)
-                Positioned(
-                  top: 0,
-                  right: 12,
-                  child: TapRegion(
-                    groupId: 'notification-dropdown',
-                    child: _buildNotificationDropdown(),
-                  ),
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (ScrollNotification notification) {
+              // Only react to vertical scrolling (ignores horizontal swipes in tabs)
+              if (notification.metrics.axis != Axis.vertical) return false;
+              if (_showNotificationDropdown) return false;
+
+              if (notification is UserScrollNotification) {
+                if (notification.direction == ScrollDirection.reverse) {
+                  if (_isNavBarVisible.value) _isNavBarVisible.value = false;
+                } else if (notification.direction == ScrollDirection.forward) {
+                  if (!_isNavBarVisible.value) _isNavBarVisible.value = true;
+                }
+              } else if (notification is ScrollUpdateNotification) {
+                final delta = notification.scrollDelta ?? 0;
+                if (delta < -4) {
+                  // Scrolling up: reveal navbar
+                  if (!_isNavBarVisible.value) _isNavBarVisible.value = true;
+                } else if (delta > 4) {
+                  // Scrolling down: hide navbar
+                  if (_isNavBarVisible.value) _isNavBarVisible.value = false;
+                }
+              }
+
+              if (notification.metrics.maxScrollExtent > 20 &&
+                  notification.metrics.pixels >=
+                      notification.metrics.maxScrollExtent - 20) {
+                if (!_isNavBarVisible.value) _isNavBarVisible.value = true;
+              }
+              return false;
+            },
+            child: Stack(
+              children: [
+                IndexedStack(
+                  index: _currentNavIndex,
+                  children: [
+                    _buildDashboardView(),
+                    const TasksPage(),
+                    YieldEstimationPage(
+                      onGrowthData: (expectedYield, shrimpHealth, plantHealth) {
+                        if (!mounted) return;
+                        setState(() {
+                          _expectedYield = expectedYield;
+                          _shrimpHealth = shrimpHealth;
+                          _plantHealth = plantHealth;
+                        });
+                      },
+                    ),
+                    const LogsPage(),
+                  ],
                 ),
-            ],
+                if (_showNotificationDropdown)
+                  Positioned(
+                    top: 0,
+                    right: 12,
+                    child: TapRegion(
+                      groupId: 'notification-dropdown',
+                      child: _buildNotificationDropdown(),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
         bottomNavigationBar: ValueListenableBuilder<bool>(
@@ -512,14 +751,11 @@ class _DashboardPageState extends State<DashboardPage>
             children: [
               _buildGreetingHeader(),
               const SizedBox(height: 18),
-              // KPI cards with "Kasalukuyang Kondisyon" header at top of dashboard
-              _buildMiniParameterGrid(),
-              const SizedBox(height: 24),
+              // Living Assets (Ulang & Plants) + Water Parameters
+              _buildWaterParametersSection(),
+              const SizedBox(height: 22),
               // Babala warning notifications
               _buildUrgentTasksSection(),
-              const SizedBox(height: 16),
-              // Additional condition metrics
-              _buildAdditionalParametersSection(),
             ],
           ),
         ),
@@ -827,14 +1063,15 @@ class _DashboardPageState extends State<DashboardPage>
                           .toUpperCase();
                       final bool isHigh = prio == 'HIGH' || prio == 'URGENT';
                       return InkWell(
-                        onTap: isTask
-                            ? () {
-                                setState(
-                                  () => _showNotificationDropdown = false,
-                                );
-                                _onNavTapped(1);
-                              }
-                            : () => _acknowledgeAlert(alert['id'] as String),
+                        onTap: () {
+                          setState(
+                            () => _showNotificationDropdown = false,
+                          );
+                          if (!isTask) {
+                            _acknowledgeAlert(alert['id'] as String);
+                          }
+                          _onNavTapped(1);
+                        },
                         child: _buildNotifItem(
                           isTask
                               ? Icons.assignment_outlined
@@ -920,61 +1157,494 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  // ── 2-COLUMN KEY METRIC MINI-PARAMETER GRID (WITH KASALUKUYANG KONDISYON HEADER) ─
+  // ── LIVING ASSETS & WATER PARAMETERS ─────────────────────────────────
 
-  Widget _buildMiniParameterGrid() {
+  Widget _buildWaterParametersSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Container(
-              width: 4,
-              height: 18,
-              decoration: BoxDecoration(
-                color: tealDark,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              "Kasalukuyang Kondisyon",
-              style: GoogleFonts.poppins(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: const Color(0xFF1E293B),
-                letterSpacing: -0.3,
-              ),
-            ),
-          ],
-        ),
+        // Big Card: Living Assets (Ulang Yield & Plant Status) with primary visual emphasis
+        _buildLivingAssetsHeroCard(),
         const SizedBox(height: 14),
 
-        // Row 1: Inaasahang Ani & pH Level
+        // Row 1: pH Level & Dissolved Oxygen
         IntrinsicHeight(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(child: _buildHarvestMiniCard()),
-              const SizedBox(width: 12),
               Expanded(child: _buildPHMiniCard()),
+              const SizedBox(width: 12),
+              Expanded(child: _buildOxygenMiniCard()),
             ],
           ),
         ),
         const SizedBox(height: 12),
 
-        // Row 2: Dissolved Oxygen & Temperatura
+        // Row 2: Temperatura & Salinity / TDS
         IntrinsicHeight(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(child: _buildOxygenMiniCard()),
-              const SizedBox(width: 12),
               Expanded(child: _buildTempMiniCard()),
+              const SizedBox(width: 12),
+              Expanded(child: _buildSalinityMiniCard()),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Row 3: Turbidity & Lebel ng Tubig
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: _buildTurbidityMiniCard()),
+              const SizedBox(width: 12),
+              Expanded(child: _buildWaterLevelMiniCard()),
             ],
           ),
         ),
       ],
+    );
+  }
+
+  // ── LIVING ASSETS HERO CARD (BIG CARD INCLUDING ULANG & PLANTS) ───────
+
+  Widget _buildLivingAssetsHeroCard() {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [
+            Color(0xFFF0FDFA),
+            Color(0xFFF8FFFD),
+            Color(0xFFF0FDF4),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(
+          color: const Color(0xFF99F6E4),
+          width: 1.4,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0F766E).withValues(alpha: 0.08),
+            blurRadius: 18,
+            offset: const Offset(0, 5),
+          ),
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 4,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(12),
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(child: _buildUlangCard()),
+            const SizedBox(width: 10),
+            Expanded(child: _buildPlantCard()),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Card 0A: Inaasahang Ani ng Ulang (Primary Focus Card)
+  Widget _buildUlangCard() {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            _currentNavIndex = 2; // Switch to Ani tab
+          });
+          _isNavBarVisible.value = true;
+        },
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(13),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: const Color(0xFFCCFBF1),
+              width: 1.1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF0F766E).withValues(alpha: 0.04),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFCCFBF1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Center(
+                      child: Icon(
+                        Icons.scale_rounded,
+                        size: 18,
+                        color: tealDark,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          "Inaasahang Ani",
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: const Color(0xFF1E293B),
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          "Ulang",
+                          style: GoogleFonts.poppins(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w500,
+                            color: tealDark,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.arrow_outward_rounded,
+                    size: 13,
+                    color: tealDark.withValues(alpha: 0.4),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                _yieldDisplay,
+                style: GoogleFonts.poppins(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  color: tealDark,
+                  letterSpacing: -0.5,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 3.5,
+                ),
+                decoration: BoxDecoration(
+                  color: _shrimpHealthBg,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: _shrimpHealthColor.withValues(alpha: 0.35),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: _shrimpHealthColor,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 5),
+                    Flexible(
+                      child: Text(
+                        _shrimpHealth.toUpperCase(),
+                        style: GoogleFonts.poppins(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w700,
+                          color: _shrimpHealthColor,
+                          letterSpacing: 0.4,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Card 0B: Kalagayan ng mga Halaman (Primary Focus Card)
+  Widget _buildPlantCard() {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            _currentNavIndex = 2; // Switch to Ani tab
+          });
+          _isNavBarVisible.value = true;
+        },
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(13),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: const Color(0xFFA7F3D0),
+              width: 1.1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF059669).withValues(alpha: 0.04),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFDCFCE7),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Center(
+                      child: Icon(
+                        Icons.eco_rounded,
+                        size: 18,
+                        color: Color(0xFF059669),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          "Mga Halaman",
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: const Color(0xFF1E293B),
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          "Biofilter",
+                          style: GoogleFonts.poppins(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w500,
+                            color: const Color(0xFF059669),
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.arrow_outward_rounded,
+                    size: 13,
+                    color: const Color(0xFF059669).withValues(alpha: 0.4),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                _plantHealth,
+                style: GoogleFonts.poppins(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: const Color(0xFF059669),
+                  letterSpacing: -0.5,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 3.5,
+                ),
+                decoration: BoxDecoration(
+                  color: _plantHealthBg,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: _plantHealthColor.withValues(alpha: 0.35),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: _plantHealthColor,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 5),
+                    Flexible(
+                      child: Text(
+                        _plantHealth.toUpperCase(),
+                        style: GoogleFonts.poppins(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w700,
+                          color: _plantHealthColor,
+                          letterSpacing: 0.4,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Card 6: Lebel ng Tubig
+  Widget _buildWaterLevelMiniCard() {
+    final waterVal = _waterLevelDisplay;
+    final isAlert = _waterLevelStatusColor == warningRed;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: const Color(0xFFE2E8F0),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFE0F2FE),
+                  shape: BoxShape.circle,
+                ),
+                child: const Center(
+                  child: Icon(
+                    Icons.water_rounded,
+                    size: 17,
+                    color: Color(0xFF0284C7),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  "Lebel ng Tubig",
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: const Color(0xFF475569),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            waterVal,
+            style: GoogleFonts.poppins(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: const Color(0xFF1E293B),
+              letterSpacing: -0.5,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+            decoration: BoxDecoration(
+              color: isAlert
+                  ? const Color(0xFFFEE2E2)
+                  : const Color(0xFFECFDF5),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: isAlert
+                    ? const Color(0xFFEF4444).withOpacity(0.35)
+                    : const Color(0xFF10B981).withOpacity(0.35),
+                width: 1,
+              ),
+            ),
+            child: Text(
+              _waterLevelStatusText,
+              style: GoogleFonts.poppins(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: isAlert
+                    ? const Color(0xFFDC2626)
+                    : const Color(0xFF059669),
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1097,87 +1767,6 @@ class _DashboardPageState extends State<DashboardPage>
           ),
         );
       }).toList(),
-    );
-  }
-
-  // Card 1: Inaasahang Ani
-  Widget _buildHarvestMiniCard() {
-    final yieldVal = _yieldDisplay;
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: const Color(0xFFE2E8F0),
-          width: 1.2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 32,
-                height: 32,
-                decoration: const BoxDecoration(
-                  color: Color(0xFFE6F4F1),
-                  shape: BoxShape.circle,
-                ),
-                child: Center(
-                  child: Icon(
-                    Icons.shopping_basket_rounded,
-                    size: 17,
-                    color: teal,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  "Inaasahang Ani",
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: const Color(0xFF475569),
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            yieldVal,
-            style: GoogleFonts.poppins(
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-              color: tealDark,
-              letterSpacing: -0.5,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            "Base sa kasalukuyang kondisyon at dami ng ulang.",
-            style: GoogleFonts.poppins(
-              fontSize: 10.5,
-              color: const Color(0xFF64748B),
-              height: 1.35,
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -1427,30 +2016,15 @@ class _DashboardPageState extends State<DashboardPage>
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      "Kondisyon ng Tubig",
-                      style: GoogleFonts.poppins(
-                        fontSize: 9.5,
-                        fontWeight: FontWeight.w500,
-                        color: const Color(0xFF94A3B8),
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    Text(
-                      "Temperatura",
-                      style: GoogleFonts.poppins(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: const Color(0xFF475569),
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
+                child: Text(
+                  "Temperatura",
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: const Color(0xFF475569),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
@@ -1500,67 +2074,13 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  // ── ADDITIONAL PARAMETERS SECTION ──────────────────────────────────────
+  // Card 5: Salinity / TDS
+  Widget _buildSalinityMiniCard() {
+    final salinityVal = _salinityDisplay;
+    final isAlert = _salinityStatusColor == warningRed;
 
-  Widget _buildAdditionalParametersSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Container(
-              width: 4,
-              height: 18,
-              decoration: BoxDecoration(
-                color: teal,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              "Iba Pang Kondisyon",
-              style: GoogleFonts.poppins(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                color: const Color(0xFF1E293B),
-                letterSpacing: -0.2,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        _buildConditionCard(
-          Icons.water_drop_outlined,
-          "Linis ng Tubig",
-          _turbidityDescription,
-          _turbidityStatus,
-          _turbidityColor,
-          value: _turbidity != null
-              ? '${_turbidity!.toStringAsFixed(0)} NTU'
-              : null,
-        ),
-        const SizedBox(height: 12),
-        _buildConditionCard(
-          Icons.eco_outlined,
-          "Mga Halaman",
-          "Malusog at patuloy na lumalaki.",
-          _plantHealth.toUpperCase(),
-          const Color(0xFF10B981),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildConditionCard(
-    IconData icon,
-    String title,
-    String description,
-    String status,
-    Color themeColor, {
-    String? value,
-  }) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(18),
@@ -1576,69 +2096,182 @@ class _DashboardPageState extends State<DashboardPage>
           ),
         ],
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: themeColor.withOpacity(0.12),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(icon, color: themeColor, size: 22),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      title,
-                      style: GoogleFonts.poppins(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: const Color(0xFF1E293B),
-                      ),
-                    ),
-                    if (value != null) ...[
-                      const SizedBox(width: 8),
-                      Text(
-                        value,
-                        style: GoogleFonts.poppins(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: themeColor,
-                        ),
-                      ),
-                    ],
-                  ],
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFE0F2FE),
+                  shape: BoxShape.circle,
                 ),
-                const SizedBox(height: 3),
-                Text(
-                  description,
-                  style: GoogleFonts.poppins(
-                    fontSize: 12.5,
-                    color: const Color(0xFF64748B),
+                child: const Center(
+                  child: Icon(
+                    Icons.opacity_rounded,
+                    size: 17,
+                    color: Color(0xFF0284C7),
                   ),
                 ),
-              ],
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  "Salinity / TDS",
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: const Color(0xFF475569),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            salinityVal,
+            style: GoogleFonts.poppins(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: const Color(0xFF1E293B),
+              letterSpacing: -0.5,
             ),
           ),
+          const SizedBox(height: 8),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
             decoration: BoxDecoration(
-              color: themeColor.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(20),
+              color: isAlert
+                  ? const Color(0xFFFEE2E2)
+                  : const Color(0xFFECFDF5),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: isAlert
+                    ? const Color(0xFFEF4444).withOpacity(0.35)
+                    : const Color(0xFF10B981).withOpacity(0.35),
+                width: 1,
+              ),
             ),
             child: Text(
-              status,
+              _salinityStatusText,
               style: GoogleFonts.poppins(
-                fontSize: 11,
+                fontSize: 10,
                 fontWeight: FontWeight.w700,
-                color: themeColor,
+                color: isAlert
+                    ? const Color(0xFFDC2626)
+                    : const Color(0xFF059669),
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Card 6: Turbidity
+  Widget _buildTurbidityMiniCard() {
+    final turbidityVal = _turbidityDisplay;
+    final isAlert = _turbidityBadgeColor == warningRed;
+    final isWarning = _turbidityBadgeColor == const Color(0xFFF59E0B);
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: const Color(0xFFE2E8F0),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFE0F2FE),
+                  shape: BoxShape.circle,
+                ),
+                child: const Center(
+                  child: Icon(
+                    Icons.blur_on_rounded,
+                    size: 17,
+                    color: Color(0xFF0284C7),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  "Turbidity",
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: const Color(0xFF475569),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            turbidityVal,
+            style: GoogleFonts.poppins(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: const Color(0xFF1E293B),
+              letterSpacing: -0.5,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+            decoration: BoxDecoration(
+              color: isAlert
+                  ? const Color(0xFFFEE2E2)
+                  : (isWarning
+                      ? const Color(0xFFFEF3C7)
+                      : const Color(0xFFECFDF5)),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: isAlert
+                    ? const Color(0xFFEF4444).withOpacity(0.35)
+                    : (isWarning
+                        ? const Color(0xFFF59E0B).withOpacity(0.35)
+                        : const Color(0xFF10B981).withOpacity(0.35)),
+                width: 1,
+              ),
+            ),
+            child: Text(
+              _turbidityBadgeText,
+              style: GoogleFonts.poppins(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: isAlert
+                    ? const Color(0xFFDC2626)
+                    : (isWarning
+                        ? const Color(0xFFD97706)
+                        : const Color(0xFF059669)),
                 letterSpacing: 0.5,
               ),
             ),

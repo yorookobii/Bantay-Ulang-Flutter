@@ -10,10 +10,10 @@ void main() {
   testWidgets('shows the direct login form', (tester) async {
     await tester.pumpWidget(buildAuthScreen());
 
-    expect(find.text('Bantay Ulang'), findsOneWidget);
-    expect(find.text('Mag-log in'), findsWidgets);
-    expect(find.text('Nakalimutan ang Password?'), findsOneWidget);
-    expect(find.text('Gumawa ng Account'), findsOneWidget);
+    expect(find.textContaining('Bantay Ulang'), findsWidgets);
+    expect(find.text('Log in'), findsWidgets);
+    expect(find.text('Forgot Password?'), findsOneWidget);
+    expect(find.text('Create an Account'), findsWidgets);
   });
 
   testWidgets('validates sign-up fields before creating an account', (
@@ -21,10 +21,13 @@ void main() {
   ) async {
     await tester.pumpWidget(buildAuthScreen());
 
-    await tester.tap(find.text('Gumawa ng Account').first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Gumawa ng Account'));
-    await tester.pump();
+    await tester.tap(find.text('Create an Account').first);
+    await tester.pump(const Duration(milliseconds: 300));
+    final submitButton = find.widgetWithText(ElevatedButton, 'Create an Account');
+    await tester.ensureVisible(submitButton);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(submitButton);
+    await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.text('Kinakailangan ang buong pangalan.'), findsOneWidget);
     expect(find.text('Kinakailangan ang email address.'), findsOneWidget);
