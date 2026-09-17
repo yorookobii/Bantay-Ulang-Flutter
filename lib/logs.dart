@@ -105,10 +105,10 @@ class _LogsPageState extends State<LogsPage>
   }
 
   void _subscribeLogs() {
-    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    // All authenticated users read all logs now (firestore.rules opened up);
+    // creator name is blanked per-card via _loggerLabel() for non-owned logs.
     _logsSub = FirebaseFirestore.instance
         .collection('logs')
-        .where('createdBy', isEqualTo: uid)
         .orderBy('createdAt', descending: true)
         .snapshots()
         .listen(
@@ -578,16 +578,20 @@ class _LogsPageState extends State<LogsPage>
     return (name: name, email: email);
   }
 
+  // Display-level only: blanks the name for logs the viewer doesn't own.
+  // The raw document (createdBy/createdByName) is still readable by any
+  // authenticated client once firestore.rules opens logs reads - this is
+  // not redaction. Name-only, no email/uid fallback, matches the behavior
+  // the log cards already showed before this was factored out.
   String _loggerLabel(Map<String, dynamic> data) {
-    final name = (data['createdByName'] as String?)?.trim() ?? '';
-    final email = (data['createdByEmail'] as String?)?.trim() ?? '';
-    final uid = (data['createdBy'] as String?)?.trim() ?? '';
+    final createdBy = (data['createdBy'] as String?)?.trim() ?? '';
+    final currentUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (createdBy.isNotEmpty && createdBy != currentUid) {
+      return 'Ibang User';
+    }
 
-    if (name.isNotEmpty && email.isNotEmpty) return '$name ($email)';
-    if (name.isNotEmpty) return name;
-    if (email.isNotEmpty) return email;
-    if (uid.isNotEmpty) return uid;
-    return 'Hindi matukoy';
+    final name = (data['createdByName'] as String?)?.trim() ?? '';
+    return name.isNotEmpty ? name : 'Hindi matukoy';
   }
 
   List<Map<String, dynamic>> getWeeklyGrowthData() {
@@ -1776,9 +1780,7 @@ Widget _buildUlangLogCard(QueryDocumentSnapshot doc) {
         ? '${date.month}/${date.day}/${date.year}'
         : '—';
         
-    // Extract only the name directly, completely ignoring the UID fallback
-    final name = (data['createdByName'] as String?)?.trim() ?? '';
-    final loggerName = name.isNotEmpty ? name : 'Hindi matukoy';
+    final loggerName = _loggerLabel(data);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -1855,9 +1857,7 @@ Widget _buildPlantLogCard(QueryDocumentSnapshot doc) {
         ? '${date.month}/${date.day}/${date.year}'
         : '—';
         
-    // Extract only the name directly, completely ignoring the UID fallback
-    final createdByName = (data['createdByName'] as String?)?.trim() ?? '';
-    final loggerName = createdByName.isNotEmpty ? createdByName : 'Hindi matukoy';
+    final loggerName = _loggerLabel(data);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
