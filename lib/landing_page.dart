@@ -43,6 +43,7 @@ class _DashboardPageState extends State<DashboardPage>
   double? _salinity;
   double? _turbidity;
   double? _waterLevel;
+  double? get waterLevel => _waterLevel;
 
   // pH threshold configuration (user-defined per farm)
   double _phMin = 6.8;
@@ -323,15 +324,6 @@ class _DashboardPageState extends State<DashboardPage>
     return 'KATAMTAMAN';
   }
 
-  String get _tempDescription {
-    if (_waterTemp == null) return 'Walang datos mula sa sensor.';
-    if (_waterTemp! < 24)
-      return 'Mababa ang temperatura. Maaaring makaapekto sa ulang.';
-    if (_waterTemp! > 30)
-      return 'Mataas ang temperatura. Bantayan ang mga ulang.';
-    return 'Tamang-tama ang temperatura para sa paglaki ng ulang.';
-  }
-
   Color get _tempColor {
     if (_waterTemp == null) return textMuted;
     if (_waterTemp! < 24 || _waterTemp! > 30) return warningRed;
@@ -485,32 +477,6 @@ class _DashboardPageState extends State<DashboardPage>
     return const Color(0xFFECFDF5);
   }
 
-  String get _waterLevelDisplay {
-    final fromAlert =
-        _extractMeasurementFromAlerts(['water level', 'lebel', 'lalim', 'level']);
-    if (fromAlert != null) return fromAlert;
-    if (_waterLevel != null) return '${_waterLevel!.toStringAsFixed(0)} cm';
-    return '95 cm';
-  }
-
-  String get _waterLevelStatusText {
-    if (_hasAlertFor(['water level', 'lebel', 'lalim', 'level'])) {
-      return 'BABALA';
-    }
-    if (_waterLevel == null) return 'NORMAL';
-    if (_waterLevel! < 40.0) return 'MABABA';
-    if (_waterLevel! > 120.0) return 'MATAAS';
-    return 'NORMAL';
-  }
-
-  Color get _waterLevelStatusColor {
-    if (_hasAlertFor(['water level', 'lebel', 'lalim', 'level'])) {
-      return warningRed;
-    }
-    if (_waterLevel == null) return teal;
-    if (_waterLevel! < 40.0 || _waterLevel! > 120.0) return warningRed;
-    return teal;
-  }
 
   String? _extractMeasurementFromAlerts(List<String> keywords) {
     for (final alert in _displayAlerts) {
@@ -1173,12 +1139,12 @@ class _DashboardPageState extends State<DashboardPage>
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Expanded(child: _buildPHMiniCard()),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(child: _buildOxygenMiniCard()),
             ],
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
 
         // Row 2: Temperatura & Salinity / TDS
         IntrinsicHeight(
@@ -1186,23 +1152,18 @@ class _DashboardPageState extends State<DashboardPage>
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Expanded(child: _buildTempMiniCard()),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(child: _buildSalinityMiniCard()),
             ],
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
 
-        // Row 3: Turbidity & Lebel ng Tubig
-        IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(child: _buildTurbidityMiniCard()),
-              const SizedBox(width: 12),
-              Expanded(child: _buildWaterLevelMiniCard()),
-            ],
-          ),
+        // Row 3: Turbidity
+        Row(
+          children: [
+            Expanded(child: _buildTurbidityMiniCard()),
+          ],
         ),
       ],
     );
@@ -1213,25 +1174,17 @@ class _DashboardPageState extends State<DashboardPage>
   Widget _buildLivingAssetsHeroCard() {
     return Container(
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [
-            Color(0xFFF0FDFA),
-            Color(0xFFF8FFFD),
-            Color(0xFFF0FDF4),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(22),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: const Color(0xFF99F6E4),
-          width: 1.4,
+          color: const Color(0xFFE2E8F0),
+          width: 1.2,
         ),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF0F766E).withValues(alpha: 0.08),
-            blurRadius: 18,
-            offset: const Offset(0, 5),
+            color: const Color(0xFF0F766E).withValues(alpha: 0.05),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
           ),
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.02),
@@ -1240,7 +1193,7 @@ class _DashboardPageState extends State<DashboardPage>
           ),
         ],
       ),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(10),
       child: IntrinsicHeight(
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1257,8 +1210,9 @@ class _DashboardPageState extends State<DashboardPage>
   // Card 0A: Inaasahang Ani ng Ulang (Primary Focus Card)
   Widget _buildUlangCard() {
     return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(16),
+      color: tealDark,
+      borderRadius: BorderRadius.circular(13),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () {
           setState(() {
@@ -1266,19 +1220,19 @@ class _DashboardPageState extends State<DashboardPage>
           });
           _isNavBarVisible.value = true;
         },
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(13),
         child: Container(
-          padding: const EdgeInsets.all(13),
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 13),
           decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
+            color: tealDark,
+            borderRadius: BorderRadius.circular(13),
             border: Border.all(
-              color: const Color(0xFFCCFBF1),
-              width: 1.1,
+              color: const Color(0xFF14B8A6).withValues(alpha: 0.35),
+              width: 1.2,
             ),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFF0F766E).withValues(alpha: 0.04),
+                color: const Color(0xFF042F2E).withValues(alpha: 0.22),
                 blurRadius: 8,
                 offset: const Offset(0, 2),
               ),
@@ -1291,17 +1245,21 @@ class _DashboardPageState extends State<DashboardPage>
               Row(
                 children: [
                   Container(
-                    width: 34,
-                    height: 34,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFCCFBF1),
+                    width: 33,
+                    height: 33,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.16),
                       shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.22),
+                        width: 1,
+                      ),
                     ),
-                    child: Center(
+                    child: const Center(
                       child: Icon(
                         Icons.scale_rounded,
-                        size: 18,
-                        color: tealDark,
+                        size: 17,
+                        color: Colors.white,
                       ),
                     ),
                   ),
@@ -1315,7 +1273,7 @@ class _DashboardPageState extends State<DashboardPage>
                           style: GoogleFonts.poppins(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
-                            color: const Color(0xFF1E293B),
+                            color: Colors.white,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -1325,7 +1283,7 @@ class _DashboardPageState extends State<DashboardPage>
                           style: GoogleFonts.poppins(
                             fontSize: 9.5,
                             fontWeight: FontWeight.w500,
-                            color: tealDark,
+                            color: const Color(0xFFCCFBF1),
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -1336,7 +1294,7 @@ class _DashboardPageState extends State<DashboardPage>
                   Icon(
                     Icons.arrow_outward_rounded,
                     size: 13,
-                    color: tealDark.withValues(alpha: 0.4),
+                    color: Colors.white.withValues(alpha: 0.7),
                   ),
                 ],
               ),
@@ -1344,9 +1302,9 @@ class _DashboardPageState extends State<DashboardPage>
               Text(
                 _yieldDisplay,
                 style: GoogleFonts.poppins(
-                  fontSize: 24,
+                  fontSize: 23,
                   fontWeight: FontWeight.w800,
-                  color: tealDark,
+                  color: Colors.white,
                   letterSpacing: -0.5,
                 ),
                 maxLines: 1,
@@ -1362,36 +1320,20 @@ class _DashboardPageState extends State<DashboardPage>
                   color: _shrimpHealthBg,
                   borderRadius: BorderRadius.circular(6),
                   border: Border.all(
-                    color: _shrimpHealthColor.withValues(alpha: 0.35),
+                    color: _shrimpHealthColor.withValues(alpha: 0.4),
                     width: 1,
                   ),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 6,
-                      height: 6,
-                      decoration: BoxDecoration(
-                        color: _shrimpHealthColor,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 5),
-                    Flexible(
-                      child: Text(
-                        _shrimpHealth.toUpperCase(),
-                        style: GoogleFonts.poppins(
-                          fontSize: 9.5,
-                          fontWeight: FontWeight.w700,
-                          color: _shrimpHealthColor,
-                          letterSpacing: 0.4,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
+                child: Text(
+                  _shrimpHealth.toUpperCase(),
+                  style: GoogleFonts.poppins(
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w700,
+                    color: _shrimpHealthColor,
+                    letterSpacing: 0.4,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
@@ -1404,8 +1346,9 @@ class _DashboardPageState extends State<DashboardPage>
   // Card 0B: Kalagayan ng mga Halaman (Primary Focus Card)
   Widget _buildPlantCard() {
     return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(16),
+      color: tealDark,
+      borderRadius: BorderRadius.circular(13),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () {
           setState(() {
@@ -1413,19 +1356,19 @@ class _DashboardPageState extends State<DashboardPage>
           });
           _isNavBarVisible.value = true;
         },
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(13),
         child: Container(
-          padding: const EdgeInsets.all(13),
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 13),
           decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
+            color: tealDark,
+            borderRadius: BorderRadius.circular(13),
             border: Border.all(
-              color: const Color(0xFFA7F3D0),
-              width: 1.1,
+              color: const Color(0xFF14B8A6).withValues(alpha: 0.35),
+              width: 1.2,
             ),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFF059669).withValues(alpha: 0.04),
+                color: const Color(0xFF042F2E).withValues(alpha: 0.22),
                 blurRadius: 8,
                 offset: const Offset(0, 2),
               ),
@@ -1438,17 +1381,21 @@ class _DashboardPageState extends State<DashboardPage>
               Row(
                 children: [
                   Container(
-                    width: 34,
-                    height: 34,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFDCFCE7),
+                    width: 33,
+                    height: 33,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.16),
                       shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.22),
+                        width: 1,
+                      ),
                     ),
                     child: const Center(
                       child: Icon(
                         Icons.eco_rounded,
-                        size: 18,
-                        color: Color(0xFF059669),
+                        size: 17,
+                        color: Colors.white,
                       ),
                     ),
                   ),
@@ -1462,7 +1409,7 @@ class _DashboardPageState extends State<DashboardPage>
                           style: GoogleFonts.poppins(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
-                            color: const Color(0xFF1E293B),
+                            color: Colors.white,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -1472,7 +1419,7 @@ class _DashboardPageState extends State<DashboardPage>
                           style: GoogleFonts.poppins(
                             fontSize: 9.5,
                             fontWeight: FontWeight.w500,
-                            color: const Color(0xFF059669),
+                            color: const Color(0xFFCCFBF1),
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -1483,7 +1430,7 @@ class _DashboardPageState extends State<DashboardPage>
                   Icon(
                     Icons.arrow_outward_rounded,
                     size: 13,
-                    color: const Color(0xFF059669).withValues(alpha: 0.4),
+                    color: Colors.white.withValues(alpha: 0.7),
                   ),
                 ],
               ),
@@ -1491,9 +1438,9 @@ class _DashboardPageState extends State<DashboardPage>
               Text(
                 _plantHealth,
                 style: GoogleFonts.poppins(
-                  fontSize: 22,
+                  fontSize: 23,
                   fontWeight: FontWeight.w800,
-                  color: const Color(0xFF059669),
+                  color: Colors.white,
                   letterSpacing: -0.5,
                 ),
                 maxLines: 1,
@@ -1509,96 +1456,17 @@ class _DashboardPageState extends State<DashboardPage>
                   color: _plantHealthBg,
                   borderRadius: BorderRadius.circular(6),
                   border: Border.all(
-                    color: _plantHealthColor.withValues(alpha: 0.35),
+                    color: _plantHealthColor.withValues(alpha: 0.4),
                     width: 1,
                   ),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 6,
-                      height: 6,
-                      decoration: BoxDecoration(
-                        color: _plantHealthColor,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 5),
-                    Flexible(
-                      child: Text(
-                        _plantHealth.toUpperCase(),
-                        style: GoogleFonts.poppins(
-                          fontSize: 9.5,
-                          fontWeight: FontWeight.w700,
-                          color: _plantHealthColor,
-                          letterSpacing: 0.4,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // Card 6: Lebel ng Tubig
-  Widget _buildWaterLevelMiniCard() {
-    final waterVal = _waterLevelDisplay;
-    final isAlert = _waterLevelStatusColor == warningRed;
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: const Color(0xFFE2E8F0),
-          width: 1.2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 32,
-                height: 32,
-                decoration: const BoxDecoration(
-                  color: Color(0xFFE0F2FE),
-                  shape: BoxShape.circle,
-                ),
-                child: const Center(
-                  child: Icon(
-                    Icons.water_rounded,
-                    size: 17,
-                    color: Color(0xFF0284C7),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
                 child: Text(
-                  "Lebel ng Tubig",
+                  _plantHealth.toUpperCase(),
                   style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: const Color(0xFF475569),
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w700,
+                    color: _plantHealthColor,
+                    letterSpacing: 0.4,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -1606,47 +1474,11 @@ class _DashboardPageState extends State<DashboardPage>
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          Text(
-            waterVal,
-            style: GoogleFonts.poppins(
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-              color: const Color(0xFF1E293B),
-              letterSpacing: -0.5,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
-            decoration: BoxDecoration(
-              color: isAlert
-                  ? const Color(0xFFFEE2E2)
-                  : const Color(0xFFECFDF5),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                color: isAlert
-                    ? const Color(0xFFEF4444).withOpacity(0.35)
-                    : const Color(0xFF10B981).withOpacity(0.35),
-                width: 1,
-              ),
-            ),
-            child: Text(
-              _waterLevelStatusText,
-              style: GoogleFonts.poppins(
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                color: isAlert
-                    ? const Color(0xFFDC2626)
-                    : const Color(0xFF059669),
-                letterSpacing: 0.5,
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
+
 
   // ── URGENT TASKS / NOTIFICATIONS (IMAGE 2 BANTAY ULANG STYLE) ──────────
 
@@ -1775,19 +1607,19 @@ class _DashboardPageState extends State<DashboardPage>
     final phVal = _phLevel != null ? _phLevel!.toStringAsFixed(1) : '7.0';
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: const Color(0xFFE2E8F0),
-          width: 1.2,
+          width: 1.1,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -1798,8 +1630,8 @@ class _DashboardPageState extends State<DashboardPage>
           Row(
             children: [
               Container(
-                width: 32,
-                height: 32,
+                width: 28,
+                height: 28,
                 decoration: const BoxDecoration(
                   color: Color(0xFFE0F2FE),
                   shape: BoxShape.circle,
@@ -1807,18 +1639,18 @@ class _DashboardPageState extends State<DashboardPage>
                 child: const Center(
                   child: Icon(
                     Icons.water_drop_rounded,
-                    size: 17,
+                    size: 15,
                     color: Color(0xFF0284C7),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 7),
               Expanded(
                 child: Text(
                   "pH Level",
                   style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
                     color: const Color(0xFF475569),
                   ),
                   maxLines: 1,
@@ -1827,19 +1659,19 @@ class _DashboardPageState extends State<DashboardPage>
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 6),
           Text(
             phVal,
             style: GoogleFonts.poppins(
-              fontSize: 24,
+              fontSize: 20,
               fontWeight: FontWeight.w800,
               color: const Color(0xFF1E293B),
               letterSpacing: -0.5,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
             decoration: BoxDecoration(
               color: _phColor == warningRed
                   ? const Color(0xFFFEE2E2)
@@ -1847,20 +1679,20 @@ class _DashboardPageState extends State<DashboardPage>
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
                 color: _phColor == warningRed
-                    ? const Color(0xFFEF4444).withOpacity(0.35)
-                    : const Color(0xFF10B981).withOpacity(0.35),
+                    ? const Color(0xFFEF4444).withValues(alpha: 0.35)
+                    : const Color(0xFF10B981).withValues(alpha: 0.35),
                 width: 1,
               ),
             ),
             child: Text(
               _phStatus == 'WALANG DATA' ? "NORMAL" : _phStatus,
               style: GoogleFonts.poppins(
-                fontSize: 10,
+                fontSize: 9,
                 fontWeight: FontWeight.w700,
                 color: _phColor == warningRed
                     ? const Color(0xFFDC2626)
                     : const Color(0xFF059669),
-                letterSpacing: 0.5,
+                letterSpacing: 0.4,
               ),
             ),
           ),
@@ -1875,19 +1707,19 @@ class _DashboardPageState extends State<DashboardPage>
         _dissolvedOxygen != null ? _dissolvedOxygen!.toStringAsFixed(1) : '7.0';
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: const Color(0xFFE2E8F0),
-          width: 1.2,
+          width: 1.1,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -1898,8 +1730,8 @@ class _DashboardPageState extends State<DashboardPage>
           Row(
             children: [
               Container(
-                width: 32,
-                height: 32,
+                width: 28,
+                height: 28,
                 decoration: const BoxDecoration(
                   color: Color(0xFFE0F2FE),
                   shape: BoxShape.circle,
@@ -1907,18 +1739,18 @@ class _DashboardPageState extends State<DashboardPage>
                 child: const Center(
                   child: Icon(
                     Icons.air_rounded,
-                    size: 17,
+                    size: 15,
                     color: Color(0xFF0284C7),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 7),
               Expanded(
                 child: Text(
                   "Dissolved Oxygen",
                   style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
                     color: const Color(0xFF475569),
                   ),
                   maxLines: 1,
@@ -1927,19 +1759,19 @@ class _DashboardPageState extends State<DashboardPage>
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 6),
           Text(
             oxygenVal,
             style: GoogleFonts.poppins(
-              fontSize: 24,
+              fontSize: 20,
               fontWeight: FontWeight.w800,
               color: const Color(0xFF1E293B),
               letterSpacing: -0.5,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
             decoration: BoxDecoration(
               color: _oxygenColor == warningRed
                   ? const Color(0xFFFEE2E2)
@@ -1947,8 +1779,8 @@ class _DashboardPageState extends State<DashboardPage>
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
                 color: _oxygenColor == warningRed
-                    ? const Color(0xFFEF4444).withOpacity(0.35)
-                    : const Color(0xFF10B981).withOpacity(0.35),
+                    ? const Color(0xFFEF4444).withValues(alpha: 0.35)
+                    : const Color(0xFF10B981).withValues(alpha: 0.35),
                 width: 1,
               ),
             ),
@@ -1957,12 +1789,12 @@ class _DashboardPageState extends State<DashboardPage>
                   ? "NORMAL"
                   : (_oxygenStatus == 'SAPAT' ? "NORMAL" : _oxygenStatus),
               style: GoogleFonts.poppins(
-                fontSize: 10,
+                fontSize: 9,
                 fontWeight: FontWeight.w700,
                 color: _oxygenColor == warningRed
                     ? const Color(0xFFDC2626)
                     : const Color(0xFF059669),
-                letterSpacing: 0.5,
+                letterSpacing: 0.4,
               ),
             ),
           ),
@@ -1974,22 +1806,23 @@ class _DashboardPageState extends State<DashboardPage>
   // Card 4: Temperatura ng Tubig
   Widget _buildTempMiniCard() {
     final tempVal =
-        _waterTemp != null ? '${_waterTemp!.toStringAsFixed(1)}°C' : '50.0°C';
+        _waterTemp != null ? '${_waterTemp!.toStringAsFixed(1)}°C' : '28.0°C';
+    final isTempAlert = _tempColor == warningRed;
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: const Color(0xFFE2E8F0),
-          width: 1.2,
+          width: 1.1,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -2000,27 +1833,27 @@ class _DashboardPageState extends State<DashboardPage>
           Row(
             children: [
               Container(
-                width: 32,
-                height: 32,
-                decoration: const BoxDecoration(
-                  color: Color(0xFFFEE2E2),
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: isTempAlert ? const Color(0xFFFEE2E2) : const Color(0xFFE0F2FE),
                   shape: BoxShape.circle,
                 ),
-                child: const Center(
+                child: Center(
                   child: Icon(
                     Icons.thermostat_rounded,
-                    size: 18,
-                    color: Color(0xFFEF4444),
+                    size: 15,
+                    color: isTempAlert ? const Color(0xFFEF4444) : const Color(0xFF0284C7),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 7),
               Expanded(
                 child: Text(
                   "Temperatura",
                   style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
                     color: const Color(0xFF475569),
                   ),
                   maxLines: 1,
@@ -2029,43 +1862,40 @@ class _DashboardPageState extends State<DashboardPage>
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Text(
             tempVal,
             style: GoogleFonts.poppins(
-              fontSize: 24,
+              fontSize: 20,
               fontWeight: FontWeight.w800,
-              color: const Color(0xFFDC2626),
+              color: isTempAlert ? const Color(0xFFDC2626) : const Color(0xFF1E293B),
               letterSpacing: -0.5,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            _waterTemp == null ? "Mataas ang temperatura." : _tempDescription,
-            style: GoogleFonts.poppins(
-              fontSize: 10.5,
-              color: _tempColor == textMuted ? const Color(0xFFDC2626) : _tempColor,
-              height: 1.3,
             ),
           ),
           const SizedBox(height: 6),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
             decoration: BoxDecoration(
-              color: const Color(0xFFFEE2E2),
+              color: isTempAlert
+                  ? const Color(0xFFFEE2E2)
+                  : const Color(0xFFECFDF5),
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
-                color: const Color(0xFFEF4444).withOpacity(0.35),
+                color: isTempAlert
+                    ? const Color(0xFFEF4444).withValues(alpha: 0.35)
+                    : const Color(0xFF10B981).withValues(alpha: 0.35),
                 width: 1,
               ),
             ),
             child: Text(
-              _tempStatus == 'WALANG DATA' ? "MATAAS" : _tempStatus,
+              _tempStatus == 'WALANG DATA' ? "NORMAL" : _tempStatus,
               style: GoogleFonts.poppins(
-                fontSize: 10,
+                fontSize: 9,
                 fontWeight: FontWeight.w700,
-                color: _tempColor == textMuted ? const Color(0xFFDC2626) : _tempColor,
-                letterSpacing: 0.5,
+                color: isTempAlert
+                    ? const Color(0xFFDC2626)
+                    : const Color(0xFF059669),
+                letterSpacing: 0.4,
               ),
             ),
           ),
@@ -2080,19 +1910,19 @@ class _DashboardPageState extends State<DashboardPage>
     final isAlert = _salinityStatusColor == warningRed;
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: const Color(0xFFE2E8F0),
-          width: 1.2,
+          width: 1.1,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -2103,8 +1933,8 @@ class _DashboardPageState extends State<DashboardPage>
           Row(
             children: [
               Container(
-                width: 32,
-                height: 32,
+                width: 28,
+                height: 28,
                 decoration: const BoxDecoration(
                   color: Color(0xFFE0F2FE),
                   shape: BoxShape.circle,
@@ -2112,18 +1942,18 @@ class _DashboardPageState extends State<DashboardPage>
                 child: const Center(
                   child: Icon(
                     Icons.opacity_rounded,
-                    size: 17,
+                    size: 15,
                     color: Color(0xFF0284C7),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 7),
               Expanded(
                 child: Text(
                   "Salinity / TDS",
                   style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
                     color: const Color(0xFF475569),
                   ),
                   maxLines: 1,
@@ -2132,19 +1962,19 @@ class _DashboardPageState extends State<DashboardPage>
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 6),
           Text(
             salinityVal,
             style: GoogleFonts.poppins(
-              fontSize: 24,
+              fontSize: 20,
               fontWeight: FontWeight.w800,
               color: const Color(0xFF1E293B),
               letterSpacing: -0.5,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
             decoration: BoxDecoration(
               color: isAlert
                   ? const Color(0xFFFEE2E2)
@@ -2152,20 +1982,20 @@ class _DashboardPageState extends State<DashboardPage>
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
                 color: isAlert
-                    ? const Color(0xFFEF4444).withOpacity(0.35)
-                    : const Color(0xFF10B981).withOpacity(0.35),
+                    ? const Color(0xFFEF4444).withValues(alpha: 0.35)
+                    : const Color(0xFF10B981).withValues(alpha: 0.35),
                 width: 1,
               ),
             ),
             child: Text(
               _salinityStatusText,
               style: GoogleFonts.poppins(
-                fontSize: 10,
+                fontSize: 9,
                 fontWeight: FontWeight.w700,
                 color: isAlert
                     ? const Color(0xFFDC2626)
                     : const Color(0xFF059669),
-                letterSpacing: 0.5,
+                letterSpacing: 0.4,
               ),
             ),
           ),
@@ -2181,71 +2011,61 @@ class _DashboardPageState extends State<DashboardPage>
     final isWarning = _turbidityBadgeColor == const Color(0xFFF59E0B);
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: const Color(0xFFE2E8F0),
-          width: 1.2,
+          width: 1.1,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Row(
         children: [
-          Row(
-            children: [
-              Container(
-                width: 32,
-                height: 32,
-                decoration: const BoxDecoration(
-                  color: Color(0xFFE0F2FE),
-                  shape: BoxShape.circle,
-                ),
-                child: const Center(
-                  child: Icon(
-                    Icons.blur_on_rounded,
-                    size: 17,
-                    color: Color(0xFF0284C7),
-                  ),
-                ),
+          Container(
+            width: 28,
+            height: 28,
+            decoration: const BoxDecoration(
+              color: Color(0xFFE0F2FE),
+              shape: BoxShape.circle,
+            ),
+            child: const Center(
+              child: Icon(
+                Icons.blur_on_rounded,
+                size: 15,
+                color: Color(0xFF0284C7),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  "Turbidity",
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: const Color(0xFF475569),
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
+            ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(width: 8),
+          Text(
+            "Turbidity",
+            style: GoogleFonts.poppins(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+              color: const Color(0xFF475569),
+            ),
+          ),
+          const Spacer(),
           Text(
             turbidityVal,
             style: GoogleFonts.poppins(
-              fontSize: 24,
+              fontSize: 18,
               fontWeight: FontWeight.w800,
               color: const Color(0xFF1E293B),
               letterSpacing: -0.5,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(width: 8),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
             decoration: BoxDecoration(
               color: isAlert
                   ? const Color(0xFFFEE2E2)
@@ -2255,24 +2075,24 @@ class _DashboardPageState extends State<DashboardPage>
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
                 color: isAlert
-                    ? const Color(0xFFEF4444).withOpacity(0.35)
+                    ? const Color(0xFFEF4444).withValues(alpha: 0.35)
                     : (isWarning
-                        ? const Color(0xFFF59E0B).withOpacity(0.35)
-                        : const Color(0xFF10B981).withOpacity(0.35)),
+                        ? const Color(0xFFF59E0B).withValues(alpha: 0.35)
+                        : const Color(0xFF10B981).withValues(alpha: 0.35)),
                 width: 1,
               ),
             ),
             child: Text(
               _turbidityBadgeText,
               style: GoogleFonts.poppins(
-                fontSize: 10,
+                fontSize: 9,
                 fontWeight: FontWeight.w700,
                 color: isAlert
                     ? const Color(0xFFDC2626)
                     : (isWarning
                         ? const Color(0xFFD97706)
                         : const Color(0xFF059669)),
-                letterSpacing: 0.5,
+                letterSpacing: 0.4,
               ),
             ),
           ),

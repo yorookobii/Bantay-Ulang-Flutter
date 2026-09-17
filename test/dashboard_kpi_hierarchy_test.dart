@@ -71,6 +71,20 @@ void main() {
       expect(content.contains('Pangkalahatang Kalagayan'), isFalse);
       expect(content.contains('_buildAquaponicsOverviewSection'), isFalse);
       expect(content.contains('_buildAquaponicsHeroCard'), isFalse);
+      expect(content.contains('"Lebel ng Tubig"'), isFalse);
+      expect(content.contains('_buildWaterLevelMiniCard'), isFalse);
+    });
+
+    test('landing_page.dart living assets hero card has white background without gradient and green cards', () {
+      final file = File('lib/landing_page.dart');
+      final content = file.readAsStringSync();
+
+      // Ensure that _buildLivingAssetsHeroCard has solid white background and no gradient
+      expect(content.contains('_buildLivingAssetsHeroCard'), isTrue);
+      expect(content.contains('LinearGradient'), isFalse);
+
+      // Ensure that Ulang and Plant cards use the topbar green shade tealDark
+      expect(content.contains('color: tealDark'), isTrue);
     });
   });
 }
