@@ -105,10 +105,10 @@ class _LogsPageState extends State<LogsPage>
   }
 
   void _subscribeLogs() {
-    // All authenticated users read all logs now (firestore.rules opened up);
-    // creator name is blanked per-card via _loggerLabel() for non-owned logs.
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
     _logsSub = FirebaseFirestore.instance
         .collection('logs')
+        .where('createdBy', isEqualTo: uid)
         .orderBy('createdAt', descending: true)
         .snapshots()
         .listen(
@@ -206,8 +206,10 @@ class _LogsPageState extends State<LogsPage>
           .limit(1)
           .get();
 
+      final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
       final logsSnap = await FirebaseFirestore.instance
           .collection('logs')
+          .where('createdBy', isEqualTo: uid)
           .orderBy('createdAt', descending: true)
           .get();
 
@@ -578,20 +580,16 @@ class _LogsPageState extends State<LogsPage>
     return (name: name, email: email);
   }
 
-  // Display-level only: blanks the name for logs the viewer doesn't own.
-  // The raw document (createdBy/createdByName) is still readable by any
-  // authenticated client once firestore.rules opens logs reads - this is
-  // not redaction. Name-only, no email/uid fallback, matches the behavior
-  // the log cards already showed before this was factored out.
   String _loggerLabel(Map<String, dynamic> data) {
-    final createdBy = (data['createdBy'] as String?)?.trim() ?? '';
-    final currentUid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    if (createdBy.isNotEmpty && createdBy != currentUid) {
-      return 'Ibang User';
-    }
-
     final name = (data['createdByName'] as String?)?.trim() ?? '';
-    return name.isNotEmpty ? name : 'Hindi matukoy';
+    final email = (data['createdByEmail'] as String?)?.trim() ?? '';
+    final uid = (data['createdBy'] as String?)?.trim() ?? '';
+
+    if (name.isNotEmpty && email.isNotEmpty) return '$name ($email)';
+    if (name.isNotEmpty) return name;
+    if (email.isNotEmpty) return email;
+    if (uid.isNotEmpty) return uid;
+    return 'Hindi matukoy';
   }
 
   List<Map<String, dynamic>> getWeeklyGrowthData() {
@@ -1780,7 +1778,9 @@ Widget _buildUlangLogCard(QueryDocumentSnapshot doc) {
         ? '${date.month}/${date.day}/${date.year}'
         : '—';
         
-    final loggerName = _loggerLabel(data);
+    // Extract only the name directly, completely ignoring the UID fallback
+    final name = (data['createdByName'] as String?)?.trim() ?? '';
+    final loggerName = name.isNotEmpty ? name : 'Hindi matukoy';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -1857,7 +1857,9 @@ Widget _buildPlantLogCard(QueryDocumentSnapshot doc) {
         ? '${date.month}/${date.day}/${date.year}'
         : '—';
         
-    final loggerName = _loggerLabel(data);
+    // Extract only the name directly, completely ignoring the UID fallback
+    final createdByName = (data['createdByName'] as String?)?.trim() ?? '';
+    final loggerName = createdByName.isNotEmpty ? createdByName : 'Hindi matukoy';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
