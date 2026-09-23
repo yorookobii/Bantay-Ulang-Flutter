@@ -527,12 +527,12 @@ class _DashboardPageState extends State<DashboardPage>
         _extractMeasurementFromAlerts(['salinity', 'tds', 'alat', 'asin']);
     if (fromAlert != null) return fromAlert;
     if (_salinity != null) return '${_salinity!.toStringAsFixed(1)} ppt';
-    return '35 ppt';
+    return '--';
   }
 
   String get _salinityStatusText {
     if (_hasAlertFor(['salinity', 'tds', 'alat', 'asin'])) return 'BABALA';
-    if (_salinity == null) return 'NORMAL';
+    if (_salinity == null) return 'WALANG DATA';
     if (_salinity! > 15.0) return 'MATAAS';
     if (_salinity! < 0.5) return 'MABABA';
     return 'NORMAL';
@@ -540,7 +540,7 @@ class _DashboardPageState extends State<DashboardPage>
 
   Color get _salinityStatusColor {
     if (_hasAlertFor(['salinity', 'tds', 'alat', 'asin'])) return warningRed;
-    if (_salinity == null) return teal;
+    if (_salinity == null) return textMuted;
     if (_salinity! > 15.0 || _salinity! < 0.5) return warningRed;
     return teal;
   }
@@ -550,18 +550,18 @@ class _DashboardPageState extends State<DashboardPage>
         _extractMeasurementFromAlerts(['turbidity', 'labo', 'linis', 'ntu']);
     if (fromAlert != null) return fromAlert;
     if (_turbidity != null) return '${_turbidity!.toStringAsFixed(0)} NTU';
-    return '12 NTU';
+    return '--';
   }
 
   String get _turbidityBadgeText {
     if (_hasAlertFor(['turbidity', 'labo', 'linis', 'ntu'])) return 'BABALA';
-    if (_turbidity == null) return 'MALINAW';
+    if (_turbidity == null) return 'WALANG DATA';
     return _turbidityStatus == 'WALANG DATA' ? 'MALINAW' : _turbidityStatus;
   }
 
   Color get _turbidityBadgeColor {
     if (_hasAlertFor(['turbidity', 'labo', 'linis', 'ntu'])) return warningRed;
-    if (_turbidity == null) return teal;
+    if (_turbidity == null) return textMuted;
     return _turbidityColor == textMuted ? teal : _turbidityColor;
   }
 
@@ -1604,7 +1604,7 @@ class _DashboardPageState extends State<DashboardPage>
 
   // Card 2: pH Level
   Widget _buildPHMiniCard() {
-    final phVal = _phLevel != null ? _phLevel!.toStringAsFixed(1) : '7.0';
+    final phVal = _phLevel != null ? _phLevel!.toStringAsFixed(1) : '--';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
@@ -1675,23 +1675,27 @@ class _DashboardPageState extends State<DashboardPage>
             decoration: BoxDecoration(
               color: _phColor == warningRed
                   ? const Color(0xFFFEE2E2)
-                  : const Color(0xFFECFDF5),
+                  : (_phColor == textMuted
+                      ? const Color(0xFFF3F4F6)
+                      : const Color(0xFFECFDF5)),
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
                 color: _phColor == warningRed
                     ? const Color(0xFFEF4444).withValues(alpha: 0.35)
-                    : const Color(0xFF10B981).withValues(alpha: 0.35),
+                    : (_phColor == textMuted
+                        ? textMuted.withValues(alpha: 0.35)
+                        : const Color(0xFF10B981).withValues(alpha: 0.35)),
                 width: 1,
               ),
             ),
             child: Text(
-              _phStatus == 'WALANG DATA' ? "NORMAL" : _phStatus,
+              _phStatus,
               style: GoogleFonts.poppins(
                 fontSize: 9,
                 fontWeight: FontWeight.w700,
                 color: _phColor == warningRed
                     ? const Color(0xFFDC2626)
-                    : const Color(0xFF059669),
+                    : (_phColor == textMuted ? textMuted : const Color(0xFF059669)),
                 letterSpacing: 0.4,
               ),
             ),
@@ -1704,7 +1708,7 @@ class _DashboardPageState extends State<DashboardPage>
   // Card 3: Dissolved Oxygen
   Widget _buildOxygenMiniCard() {
     final oxygenVal =
-        _dissolvedOxygen != null ? _dissolvedOxygen!.toStringAsFixed(1) : '7.0';
+        _dissolvedOxygen != null ? _dissolvedOxygen!.toStringAsFixed(1) : '--';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
@@ -1775,25 +1779,27 @@ class _DashboardPageState extends State<DashboardPage>
             decoration: BoxDecoration(
               color: _oxygenColor == warningRed
                   ? const Color(0xFFFEE2E2)
-                  : const Color(0xFFECFDF5),
+                  : (_oxygenColor == textMuted
+                      ? const Color(0xFFF3F4F6)
+                      : const Color(0xFFECFDF5)),
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
                 color: _oxygenColor == warningRed
                     ? const Color(0xFFEF4444).withValues(alpha: 0.35)
-                    : const Color(0xFF10B981).withValues(alpha: 0.35),
+                    : (_oxygenColor == textMuted
+                        ? textMuted.withValues(alpha: 0.35)
+                        : const Color(0xFF10B981).withValues(alpha: 0.35)),
                 width: 1,
               ),
             ),
             child: Text(
-              _oxygenStatus == 'WALANG DATA'
-                  ? "NORMAL"
-                  : (_oxygenStatus == 'SAPAT' ? "NORMAL" : _oxygenStatus),
+              _oxygenStatus == 'SAPAT' ? "NORMAL" : _oxygenStatus,
               style: GoogleFonts.poppins(
                 fontSize: 9,
                 fontWeight: FontWeight.w700,
                 color: _oxygenColor == warningRed
                     ? const Color(0xFFDC2626)
-                    : const Color(0xFF059669),
+                    : (_oxygenColor == textMuted ? textMuted : const Color(0xFF059669)),
                 letterSpacing: 0.4,
               ),
             ),
@@ -1806,7 +1812,7 @@ class _DashboardPageState extends State<DashboardPage>
   // Card 4: Temperatura ng Tubig
   Widget _buildTempMiniCard() {
     final tempVal =
-        _waterTemp != null ? '${_waterTemp!.toStringAsFixed(1)}°C' : '28.0°C';
+        _waterTemp != null ? '${_waterTemp!.toStringAsFixed(1)}°C' : '--';
     final isTempAlert = _tempColor == warningRed;
 
     return Container(
@@ -1878,23 +1884,27 @@ class _DashboardPageState extends State<DashboardPage>
             decoration: BoxDecoration(
               color: isTempAlert
                   ? const Color(0xFFFEE2E2)
-                  : const Color(0xFFECFDF5),
+                  : (_tempColor == textMuted
+                      ? const Color(0xFFF3F4F6)
+                      : const Color(0xFFECFDF5)),
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
                 color: isTempAlert
                     ? const Color(0xFFEF4444).withValues(alpha: 0.35)
-                    : const Color(0xFF10B981).withValues(alpha: 0.35),
+                    : (_tempColor == textMuted
+                        ? textMuted.withValues(alpha: 0.35)
+                        : const Color(0xFF10B981).withValues(alpha: 0.35)),
                 width: 1,
               ),
             ),
             child: Text(
-              _tempStatus == 'WALANG DATA' ? "NORMAL" : _tempStatus,
+              _tempStatus,
               style: GoogleFonts.poppins(
                 fontSize: 9,
                 fontWeight: FontWeight.w700,
                 color: isTempAlert
                     ? const Color(0xFFDC2626)
-                    : const Color(0xFF059669),
+                    : (_tempColor == textMuted ? textMuted : const Color(0xFF059669)),
                 letterSpacing: 0.4,
               ),
             ),
@@ -1908,6 +1918,7 @@ class _DashboardPageState extends State<DashboardPage>
   Widget _buildSalinityMiniCard() {
     final salinityVal = _salinityDisplay;
     final isAlert = _salinityStatusColor == warningRed;
+    final isNoData = _salinityStatusColor == textMuted;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
@@ -1978,12 +1989,14 @@ class _DashboardPageState extends State<DashboardPage>
             decoration: BoxDecoration(
               color: isAlert
                   ? const Color(0xFFFEE2E2)
-                  : const Color(0xFFECFDF5),
+                  : (isNoData ? const Color(0xFFF3F4F6) : const Color(0xFFECFDF5)),
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
                 color: isAlert
                     ? const Color(0xFFEF4444).withValues(alpha: 0.35)
-                    : const Color(0xFF10B981).withValues(alpha: 0.35),
+                    : (isNoData
+                        ? textMuted.withValues(alpha: 0.35)
+                        : const Color(0xFF10B981).withValues(alpha: 0.35)),
                 width: 1,
               ),
             ),
@@ -1994,7 +2007,7 @@ class _DashboardPageState extends State<DashboardPage>
                 fontWeight: FontWeight.w700,
                 color: isAlert
                     ? const Color(0xFFDC2626)
-                    : const Color(0xFF059669),
+                    : (isNoData ? textMuted : const Color(0xFF059669)),
                 letterSpacing: 0.4,
               ),
             ),
@@ -2009,6 +2022,7 @@ class _DashboardPageState extends State<DashboardPage>
     final turbidityVal = _turbidityDisplay;
     final isAlert = _turbidityBadgeColor == warningRed;
     final isWarning = _turbidityBadgeColor == const Color(0xFFF59E0B);
+    final isNoData = _turbidityBadgeColor == textMuted;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -2071,14 +2085,16 @@ class _DashboardPageState extends State<DashboardPage>
                   ? const Color(0xFFFEE2E2)
                   : (isWarning
                       ? const Color(0xFFFEF3C7)
-                      : const Color(0xFFECFDF5)),
+                      : (isNoData ? const Color(0xFFF3F4F6) : const Color(0xFFECFDF5))),
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
                 color: isAlert
                     ? const Color(0xFFEF4444).withValues(alpha: 0.35)
                     : (isWarning
                         ? const Color(0xFFF59E0B).withValues(alpha: 0.35)
-                        : const Color(0xFF10B981).withValues(alpha: 0.35)),
+                        : (isNoData
+                            ? textMuted.withValues(alpha: 0.35)
+                            : const Color(0xFF10B981).withValues(alpha: 0.35))),
                 width: 1,
               ),
             ),
@@ -2091,7 +2107,7 @@ class _DashboardPageState extends State<DashboardPage>
                     ? const Color(0xFFDC2626)
                     : (isWarning
                         ? const Color(0xFFD97706)
-                        : const Color(0xFF059669)),
+                        : (isNoData ? textMuted : const Color(0xFF059669))),
                 letterSpacing: 0.4,
               ),
             ),
