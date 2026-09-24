@@ -84,7 +84,7 @@ class _DashboardPageState extends State<DashboardPage>
   String _initials = 'JS';
 
   // Firestore subscriptions
-  StreamSubscription<QuerySnapshot>? _sensorSub;
+  StreamSubscription<DocumentSnapshot>? _sensorSub;
   StreamSubscription<QuerySnapshot>? _alertsSub;
   StreamSubscription<QuerySnapshot>? _tasksSub;
   StreamSubscription<QuerySnapshot>? _growthSub;
@@ -124,23 +124,24 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   void _subscribeSensorReadings() {
+    // Reads the live Aquaponics/Ulang doc (ESP32-updated), nested
+    // statistics.*.average paths — mirrors the web's normalizeAquaponicsReading
+    // (aquaponicsReading.js:48-53) so mobile and web read the same source.
     _sensorSub = FirebaseFirestore.instance
-        .collection('sensor_readings')
-        .orderBy('timestamp', descending: true)
-        .limit(1)
+        .collection('Aquaponics')
+        .doc('Ulang')
         .snapshots()
         .listen(
           (snapshot) {
             if (!mounted) return;
-            if (snapshot.docs.isEmpty) return;
-            final data = snapshot.docs.first.data() as Map<String, dynamic>;
+            final data = snapshot.data() as Map<String, dynamic>?;
+            final stats = data?['statistics'] as Map<String, dynamic>?;
             setState(() {
-              _waterTemp = (data['waterTemp'] as num?)?.toDouble();
-              _phLevel = (data['phLevel'] as num?)?.toDouble();
-              _dissolvedOxygen = (data['dissolvedOxygen'] as num?)?.toDouble();
-              _salinity = (data['salinity'] as num?)?.toDouble();
-              _turbidity = (data['turbidity'] as num?)?.toDouble();
-              _waterLevel = (data['waterLevel'] as num?)?.toDouble();
+              _waterTemp = (stats?['waterTemperatureC']?['average'] as num?)?.toDouble();
+              _phLevel = (stats?['phValue']?['average'] as num?)?.toDouble();
+              _dissolvedOxygen = (stats?['oxygenLevelMgL']?['average'] as num?)?.toDouble();
+              _salinity = (stats?['salinityPpt']?['average'] as num?)?.toDouble();
+              _turbidity = (stats?['turbidityNTU']?['average'] as num?)?.toDouble();
             });
           },
           onError: (error) =>
