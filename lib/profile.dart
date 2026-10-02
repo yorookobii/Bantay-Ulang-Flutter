@@ -1,7 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'dart:io';
 import 'package:google_fonts/google_fonts.dart';
 import 'landing_page.dart';
 import 'tasks.dart';
@@ -26,7 +25,6 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
   late GlobalKey<ScaffoldState> _scaffoldKey;
   late AnimationController _fadeController;
 
-  File? _profileImage;
   late TextEditingController _addressController;
   late TextEditingController _fullNameController;
   bool _isEditingAddress = false;
@@ -224,65 +222,28 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
               ),
               const SizedBox(height: 32),
 
-              // Profile Picture Section
-              Stack(
-                alignment: Alignment.center,
-                children: [
-                  Container(
-                    width: 120,
-                    height: 120,
-                    decoration: BoxDecoration(
-                      color: teal.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(60),
-                      border: Border.all(
-                        color: teal.withOpacity(0.3),
-                        width: 2,
-                      ),
-                    ),
-                    child: _profileImage != null
-                        ? ClipRRect(
-                            borderRadius: BorderRadius.circular(60),
-                            child: Image.file(
-                              _profileImage!,
-                              fit: BoxFit.cover,
-                            ),
-                          )
-                        : Center(
-                            child: Text(
-                              _initials,
-                              style: GoogleFonts.poppins(
-                                fontSize: 48,
-                                fontWeight: FontWeight.w700,
-                                color: teal,
-                              ),
-                            ),
-                          ),
+              // Read-only profile avatar
+              Container(
+                width: 120,
+                height: 120,
+                decoration: BoxDecoration(
+                  color: teal.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(60),
+                  border: Border.all(
+                    color: teal.withOpacity(0.3),
+                    width: 2,
                   ),
-                  Positioned(
-                    bottom: 0,
-                    right: 0,
-                    child: GestureDetector(
-                      onTap: _pickImage,
-                      child: Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: teal,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: Colors.white,
-                            width: 3,
-                          ),
-                        ),
-                        child: const Icon(
-                          Icons.camera_alt,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
+                ),
+                child: Center(
+                  child: Text(
+                    _initials,
+                    style: GoogleFonts.poppins(
+                      fontSize: 48,
+                      fontWeight: FontWeight.w700,
+                      color: teal,
                     ),
                   ),
-                ],
+                ),
               ),
               const SizedBox(height: 32),
 
@@ -423,58 +384,6 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
         if (!mounted) return;
         Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
       },
-    );
-  }
-
-  void _pickImage() {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) => AlertDialog(
-        title: Text(
-          "Upload Image",
-          style: GoogleFonts.poppins(fontWeight: FontWeight.w700),
-        ),
-        content: Text(
-          "Note: Are you sure you want to use this picture?.",
-          style: GoogleFonts.poppins(),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(
-              "Cancel",
-              style: GoogleFonts.poppins(
-                fontWeight: FontWeight.w600,
-                color: teal,
-              ),
-            ),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              setState(() {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Profile picture updated successfully!',
-                      style: GoogleFonts.poppins(),
-                    ),
-                    backgroundColor: teal,
-                    duration: const Duration(seconds: 2),
-                  ),
-                );
-              });
-            },
-            child: Text(
-              "Use Image",
-              style: GoogleFonts.poppins(
-                fontWeight: FontWeight.w600,
-                color: teal,
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 

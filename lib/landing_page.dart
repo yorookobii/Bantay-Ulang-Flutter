@@ -396,13 +396,7 @@ class _DashboardPageState extends State<DashboardPage>
     return teal;
   }
 
-  int get _notificationCount {
-    final alerts = _displayAlerts;
-    final unread = alerts.where((alert) {
-      return !_seenNotificationKeys.contains('alert:${alert['id']}');
-    }).length;
-    return _pendingTasks.length + (unread > 0 ? 1 : 0);
-  }
+  int get _notificationCount => _pendingTasks.length;
   bool get _hasUnreadNotifications => _notificationCount > 0;
 
   void _toggleNotificationDropdown() {
@@ -780,7 +774,7 @@ class _DashboardPageState extends State<DashboardPage>
                   ),
                 ),
 
-                // Bell icon — badge includes water alerts and assigned tasks.
+                // Bell icon — badge shows the current user's assigned tasks.
                 TapRegion(
                   groupId: 'notification-dropdown',
                   onTapOutside: (_) => _closeNotificationDropdown(),
