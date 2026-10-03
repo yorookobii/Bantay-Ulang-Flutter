@@ -41,7 +41,7 @@ class LoginPage extends StatelessWidget {
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      'An Adaptive Ulang Focused Aquaponic System',
+                      'Keep track of your ulang and plants',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 18,

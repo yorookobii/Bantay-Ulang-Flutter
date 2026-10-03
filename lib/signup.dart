@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'password_validation.dart';
+
 enum AuthMessageKind { success, error, warning, info }
 
 class SignupPage extends StatefulWidget {
@@ -176,9 +178,9 @@ class _SignupPageState extends State<SignupPage>
           _remainingLockoutSeconds = 0;
           if (_isSignIn &&
               _message != null &&
-              _message!.contains('Naka-lock')) {
+              _message!.startsWith('Too many login attempts.')) {
             _message =
-                'Tapos na ang pag-lock. Maaari ka nang mag-log in muli.';
+                'You can try logging in again now.';
             _messageKind = AuthMessageKind.info;
           }
         });
@@ -205,7 +207,7 @@ class _SignupPageState extends State<SignupPage>
 
   String _lockoutErrorMessage(int secondsRemaining) {
     final formattedTime = _formatLockoutDuration(secondsRemaining);
-    return 'Naka-lock ang iyong account. Subukan muli pagkalipas ng $formattedTime.';
+    return 'Too many login attempts. Try again in $formattedTime.';
   }
 
   void _setMode(bool signIn) {
@@ -281,7 +283,7 @@ class _SignupPageState extends State<SignupPage>
       if (data['role'] != 'user') {
         await FirebaseAuth.instance.signOut();
         _setMessage(
-          'Ang mobile app ay para lamang sa farm users. Gamitin ang web portal para sa admin o technician account.',
+          'This app is for farm users. Admins and technicians can log in on the website.',
           AuthMessageKind.error,
         );
         return;
@@ -291,7 +293,7 @@ class _SignupPageState extends State<SignupPage>
         if (!mounted) return;
         setState(() => _showResendOption = true);
         _setMessage(
-          'Hindi pa verified ang iyong email. Tingnan ang verification link sa iyong inbox.',
+          'Please verify your email before logging in. Check your inbox for the link.',
           AuthMessageKind.info,
         );
         return;
@@ -302,7 +304,7 @@ class _SignupPageState extends State<SignupPage>
       if (data['status'] != 'active') {
         await FirebaseAuth.instance.signOut();
         _setMessage(
-          'Verified na ang email mo. Hinihintay pa ang pag-apruba ng administrator.',
+          'Your email is verified. Please wait for an admin to approve your account.',
           AuthMessageKind.warning,
         );
         return;
@@ -325,7 +327,7 @@ class _SignupPageState extends State<SignupPage>
         } else {
           final attemptsLeft = _maxFailedAttempts - _failedAttempts;
           _setMessage(
-            '${_authErrorMessage(error.code)} May $attemptsLeft ${attemptsLeft == 1 ? 'pagsubok' : 'mga pagsubok'} na lang bago ma-lock ang pag-log in nang 3 minuto.',
+            '${_authErrorMessage(error.code)} You have $attemptsLeft ${attemptsLeft == 1 ? 'try' : 'tries'} left before a 3-minute wait.',
             AuthMessageKind.error,
           );
         }
@@ -334,7 +336,7 @@ class _SignupPageState extends State<SignupPage>
       }
     } catch (_) {
       _setMessage(
-        'Hindi makapag-log in ngayon. Subukan muli.',
+        'Unable to log in right now. Please try again.',
         AuthMessageKind.error,
       );
     } finally {
@@ -374,14 +376,14 @@ class _SignupPageState extends State<SignupPage>
       });
       _formKey.currentState?.reset();
       _setMessage(
-        'Nagawa na ang account. I-verify ang email at hintayin ang pag-apruba ng administrator bago mag-log in.',
+        'Account created. Check your email to verify your account, then wait for admin approval before logging in.',
         AuthMessageKind.success,
       );
     } on FirebaseAuthException catch (error) {
       _setMessage(_authErrorMessage(error.code), AuthMessageKind.error);
     } catch (_) {
       _setMessage(
-        'Hindi magawa ang account ngayon. Subukan muli.',
+        'Unable to create your account right now. Please try again.',
         AuthMessageKind.error,
       );
     } finally {
@@ -400,7 +402,7 @@ class _SignupPageState extends State<SignupPage>
     if (_emailController.text.trim().isEmpty ||
         _passwordController.text.isEmpty) {
       _setMessage(
-        'Ilagay ang email at password para maipadala muli ang verification link.',
+        'Enter your email and password to resend the verification email.',
         AuthMessageKind.info,
       );
       return;
@@ -415,7 +417,7 @@ class _SignupPageState extends State<SignupPage>
       await credential.user!.sendEmailVerification();
       await FirebaseAuth.instance.signOut();
       _setMessage(
-        'Naipadala muli ang verification email. Tingnan ang iyong inbox.',
+        'Verification email sent. Check your inbox for the link.',
         AuthMessageKind.success,
       );
     } on FirebaseAuthException catch (error) {
@@ -434,7 +436,7 @@ class _SignupPageState extends State<SignupPage>
         } else {
           final attemptsLeft = _maxFailedAttempts - _failedAttempts;
           _setMessage(
-            '${_authErrorMessage(error.code)} May $attemptsLeft ${attemptsLeft == 1 ? 'pagsubok' : 'mga pagsubok'} na lang bago ma-lock ang pag-log in nang 3 minuto.',
+            '${_authErrorMessage(error.code)} You have $attemptsLeft ${attemptsLeft == 1 ? 'try' : 'tries'} left before a 3-minute wait.',
             AuthMessageKind.error,
           );
         }
@@ -450,7 +452,7 @@ class _SignupPageState extends State<SignupPage>
     final email = _emailController.text.trim();
     if (!_isValidEmail(email)) {
       _setMessage(
-        'Maglagay muna ng wastong email address.',
+        'Enter a valid email address first.',
         AuthMessageKind.info,
       );
       return;
@@ -459,7 +461,7 @@ class _SignupPageState extends State<SignupPage>
     try {
       await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
       _setMessage(
-        'Naipadala ang password reset link. Tingnan ang iyong inbox.',
+        'Password reset email sent. Check your inbox for the link.',
         AuthMessageKind.success,
       );
     } on FirebaseAuthException catch (error) {
@@ -478,25 +480,26 @@ class _SignupPageState extends State<SignupPage>
       case 'user-not-found':
       case 'wrong-password':
       case 'invalid-credential':
-        return 'Mali ang email o password.';
+      case 'invalid-login-credentials':
+        return 'Incorrect email or password.';
       case 'email-already-in-use':
-        return 'May account nang gumagamit ng email na ito.';
+        return 'An account already uses this email. Try logging in.';
       case 'weak-password':
-        return 'Masyadong mahina ang password.';
+        return 'Choose a stronger password with at least 8 characters.';
       case 'invalid-email':
-        return 'Hindi wastong email address.';
+        return 'Enter a valid email address.';
       case 'too-many-requests':
-        return 'Masyadong maraming attempt. Subukan muli mamaya.';
+        return 'Too many attempts. Please try again later.';
       case 'network-request-failed':
-        return 'Walang maayos na koneksyon sa internet.';
+        return 'Check your internet connection and try again.';
       default:
-        return 'May hindi inaasahang error. Subukan muli.';
+        return 'Something went wrong. Please try again.';
     }
   }
 
   String? _requiredValidator(String? value, String label) {
     if (value == null || value.trim().isEmpty) {
-      return 'Kinakailangan ang $label.';
+      return 'Enter your $label.';
     }
     return null;
   }
@@ -504,24 +507,20 @@ class _SignupPageState extends State<SignupPage>
   String? _emailValidator(String? value) {
     final required = _requiredValidator(value, 'email address');
     if (required != null) return required;
-    if (!_isValidEmail(value!.trim())) return 'Hindi wastong email address.';
+    if (!_isValidEmail(value!.trim())) return 'Enter a valid email address.';
     return null;
   }
 
   String? _passwordValidator(String? value) {
-    final required = _requiredValidator(value, 'password');
-    if (required != null) return required;
-    if (!_isSignIn && value!.length < 8) {
-      return 'Gumamit ng hindi bababa sa 8 character.';
-    }
-    return null;
+    return _isSignIn
+        ? _requiredValidator(value, 'password')
+        : validateNewPassword(value);
   }
 
   String? _confirmPasswordValidator(String? value) {
-    final required = _requiredValidator(value, 'kumpirmasyon ng password');
-    if (required != null) return required;
+    if (value == null || value.isEmpty) return 'Confirm your password.';
     if (value != _passwordController.text) {
-      return 'Hindi magkatugma ang mga password.';
+      return 'Passwords do not match.';
     }
     return null;
   }
@@ -608,10 +607,10 @@ class _SignupPageState extends State<SignupPage>
               if (!_isSignIn) ...[
                 _buildTextField(
                   controller: _nameController,
-                  label: 'Buong Pangalan',
+                  label: 'Full Name',
                   icon: Icons.person_outline,
                   validator: (value) =>
-                      _requiredValidator(value, 'buong pangalan'),
+                      _requiredValidator(value, 'full name'),
                   autofillHints: const [AutofillHints.name],
                   textCapitalization: TextCapitalization.words,
                   textInputAction: TextInputAction.next,
@@ -648,14 +647,14 @@ class _SignupPageState extends State<SignupPage>
               ),
               if (!_isSignIn) ...[
                 const SizedBox(height: 7),
-                // Text(
-                //   'Gumamit ng hindi bababa sa 8 character.',
-                //   style: GoogleFonts.poppins(fontSize: 12, color: _textMuted),
-                // ),
+                Text(
+                  'Use at least 8 characters. Avoid common passwords and repeated characters.',
+                  style: GoogleFonts.poppins(fontSize: 12, color: _textMuted),
+                ),
                 const SizedBox(height: 22),
                 _buildPasswordField(
                   controller: _confirmPasswordController,
-                  label: 'Confirm ang Password',
+                  label: 'Confirm Password',
                   visible: _confirmPasswordVisible,
                   onVisibilityChanged: () {
                     setState(
@@ -879,8 +878,8 @@ class _SignupPageState extends State<SignupPage>
             decoration: _inputDecoration(label, Icons.lock_outline).copyWith(
               suffixIcon: IconButton(
                 tooltip: visible
-                    ? 'Itago ang password'
-                    : 'Ipakita ang password',
+                    ? 'Hide password'
+                    : 'Show password',
                 onPressed: _isLoading ? null : onVisibilityChanged,
                 icon: Icon(
                   visible
@@ -924,7 +923,7 @@ class _SignupPageState extends State<SignupPage>
     const borderColor = Color(0xFFD1D5DB);
     return InputDecoration(
       hintText: switch (label) {
-        'Name' => 'John Doe',
+        'Full Name' => 'Enter your full name',
         'Email Address' => 'you@example.com',
         'Confirm Password' => 'Confirm your password',
         _ => 'Enter your password',
@@ -1013,7 +1012,7 @@ class _SignupPageState extends State<SignupPage>
               child: TextButton.icon(
                 onPressed: _isLoading ? null : _resendVerification,
                 icon: const Icon(Icons.mark_email_unread_outlined, size: 18),
-                label: const Text('Ipadala muli ang verification email'),
+                label: const Text('Resend verification email'),
               ),
             ),
           ],

@@ -242,6 +242,151 @@ class _DashboardPageState extends State<DashboardPage>
         );
   }
 
+  Future<void> _refreshDashboardData() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    const serverOptions = GetOptions(source: Source.server);
+
+    final sensorFuture = FirebaseFirestore.instance
+        .collection('Aquaponics')
+        .doc('Ulang')
+        .get(serverOptions);
+    final alertsFuture = FirebaseFirestore.instance
+        .collection('alerts')
+        .where('status', isEqualTo: 'active')
+        .get(serverOptions);
+    final growthFuture = FirebaseFirestore.instance
+        .collection('growth_indicators')
+        .orderBy('timestamp', descending: true)
+        .limit(1)
+        .get(serverOptions);
+    final Future<QuerySnapshot<Map<String, dynamic>>?> tasksFuture = uid == null
+        ? Future.value()
+        : FirebaseFirestore.instance
+              .collection('tasks')
+              .where('assignedTo', isEqualTo: uid)
+              .orderBy('createdAt', descending: true)
+              .get(serverOptions);
+
+    try {
+      final snapshots = await Future.wait<Object?>([
+        sensorFuture,
+        alertsFuture,
+        growthFuture,
+        tasksFuture,
+      ]);
+      if (!mounted) return;
+
+      final sensorSnapshot =
+          snapshots[0] as DocumentSnapshot<Map<String, dynamic>>;
+      final alertsSnapshot =
+          snapshots[1] as QuerySnapshot<Map<String, dynamic>>;
+      final growthSnapshot =
+          snapshots[2] as QuerySnapshot<Map<String, dynamic>>;
+      final tasksSnapshot =
+          snapshots[3] as QuerySnapshot<Map<String, dynamic>>?;
+
+      final sensorData = sensorSnapshot.data();
+      final stats = sensorData?['statistics'] as Map<String, dynamic>?;
+      final refreshedWaterTemp =
+          (stats?['waterTemperatureC']?['average'] as num?)?.toDouble();
+      final refreshedPh =
+          (stats?['phValue']?['average'] as num?)?.toDouble();
+      final refreshedDissolvedOxygen =
+          (stats?['oxygenLevelMgL']?['average'] as num?)?.toDouble();
+      final refreshedSalinity =
+          (stats?['salinityPpt']?['average'] as num?)?.toDouble();
+      final refreshedTurbidity =
+          (stats?['turbidityNTU']?['average'] as num?)?.toDouble();
+      final readingsChanged = refreshedWaterTemp != _waterTemp ||
+          refreshedPh != _phLevel ||
+          refreshedDissolvedOxygen != _dissolvedOxygen ||
+          refreshedSalinity != _salinity ||
+          refreshedTurbidity != _turbidity;
+      final activeAlerts = alertsSnapshot.docs.map((doc) {
+        return <String, dynamic>{'id': doc.id, ...doc.data()};
+      }).toList();
+      final pendingTasks = tasksSnapshot?.docs
+              .map((doc) => <String, dynamic>{'id': doc.id, ...doc.data()})
+              .where((task) => task['status'] == 'pending')
+              .toList() ??
+          <Map<String, dynamic>>[];
+
+      Map<String, dynamic>? growthData;
+      if (growthSnapshot.docs.isNotEmpty) {
+        growthData = growthSnapshot.docs.first.data();
+      }
+
+      setState(() {
+        _waterTemp = refreshedWaterTemp;
+        _phLevel = refreshedPh;
+        _dissolvedOxygen = refreshedDissolvedOxygen;
+        _salinity = refreshedSalinity;
+        _turbidity = refreshedTurbidity;
+        _activeAlerts = activeAlerts;
+        _pendingTasks = pendingTasks;
+
+        if (growthData != null) {
+          final rfYield =
+              (growthData['rfProjectedYield'] as num?)?.toDouble() ??
+              (growthData['expectedYield'] as num?)?.toDouble();
+          if (rfYield != null && rfYield > 0) {
+            _expectedYield = rfYield;
+          }
+          _shrimpHealth =
+              (growthData['shrimpHealth'] as String?) ?? 'Malusog';
+          _plantHealth = (growthData['plantHealth'] as String?) ?? 'Maayos';
+        }
+      });
+
+      await Future.wait([_loadUserInitials(), _loadPhThresholds()]);
+      _showDashboardRefreshMessage(
+        readingsChanged
+            ? 'Dashboard refreshed with new sensor data.'
+            : 'The data is up to date.',
+      );
+    } catch (error) {
+      debugPrint('Dashboard refresh error: $error');
+      _showDashboardRefreshMessage(
+        'Unable to refresh the dashboard. Please try again.',
+        isError: true,
+      );
+    }
+  }
+
+  void _showDashboardRefreshMessage(
+    String message, {
+    bool isError = false,
+  }) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(
+                isError ? Icons.error_outline : Icons.check_circle,
+                color: Colors.white,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  message,
+                  style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: isError ? warningRed : tealDark,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          margin: const EdgeInsets.all(16),
+        ),
+      );
+  }
+
   Future<void> _loadUserInitials() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
@@ -704,20 +849,25 @@ class _DashboardPageState extends State<DashboardPage>
           begin: 0,
           end: 1,
         ).animate(CurvedAnimation(parent: _fadeController, curve: Curves.easeIn)),
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildGreetingHeader(),
-              const SizedBox(height: 18),
-              // Living Assets (Ulang & Plants) + Water Parameters
-              _buildWaterParametersSection(),
-              const SizedBox(height: 22),
-              // Babala warning notifications
-              _buildUrgentTasksSection(),
-            ],
+        child: RefreshIndicator(
+          key: const Key('dashboard_refresh_indicator'),
+          color: teal,
+          onRefresh: _refreshDashboardData,
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildGreetingHeader(),
+                const SizedBox(height: 18),
+                // Living Assets (Ulang & Plants) + Water Parameters
+                _buildWaterParametersSection(),
+                const SizedBox(height: 22),
+                // Babala warning notifications
+                _buildUrgentTasksSection(),
+              ],
+            ),
           ),
         ),
       ),

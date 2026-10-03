@@ -1159,7 +1159,7 @@ class _LogsPageState extends State<LogsPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header with Title, ABW Subtitle, and Optional Toggle
+          // Header with title, weight subtitle, refresh button, and view dropdown
           Row(
             children: [
               Container(
@@ -1220,44 +1220,52 @@ class _LogsPageState extends State<LogsPage>
                         ),
                 ),
               ),
-              if (hasMoreThanThree) const SizedBox(width: 8),
-              if (hasMoreThanThree)
-                InkWell(
-                  onTap: () {
-                    setState(() {
-                      _showAllWeeks = !_showAllWeeks;
-                      _selectedWeekIndex = null;
-                    });
-                  },
-                  borderRadius: BorderRadius.circular(20),
+              if (hasMoreThanThree) ...[
+                const SizedBox(width: 8),
+                Tooltip(
+                  message: 'Graph view',
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                     decoration: BoxDecoration(
-                      color: _showAllWeeks ? tealDark : tealLight,
+                      color: tealLight,
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(color: teal.withValues(alpha: 0.3)),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          _showAllWeeks ? Icons.filter_alt_outlined : Icons.history_rounded,
-                          size: 13,
-                          color: _showAllWeeks ? Colors.white : tealDark,
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<bool>(
+                        value: _showAllWeeks,
+                        isDense: true,
+                        menuWidth: 150,
+                        icon: Icon(Icons.keyboard_arrow_down, size: 16, color: tealDark),
+                        dropdownColor: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: tealDark,
                         ),
-                        const SizedBox(width: 4),
-                        Text(
-                          _showAllWeeks ? "Huling 3" : "Lahat (${allWeeks.length})",
-                          style: GoogleFonts.poppins(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: _showAllWeeks ? Colors.white : tealDark,
-                          ),
-                        ),
-                      ],
+                        selectedItemBuilder: (context) => const [
+                          Text('Last 3'),
+                          Text('Overall'),
+                        ],
+                        items: const [
+                          DropdownMenuItem(value: false, child: Text('Last 3 Weeks')),
+                          DropdownMenuItem(value: true, child: Text('Overall')),
+                        ],
+                        onChanged: (showAllWeeks) {
+                          if (showAllWeeks == null || showAllWeeks == _showAllWeeks) {
+                            return;
+                          }
+                          setState(() {
+                            _showAllWeeks = showAllWeeks;
+                            _selectedWeekIndex = null;
+                          });
+                        },
+                      ),
                     ),
                   ),
                 ),
+              ],
             ],
           ),
           const SizedBox(height: 14),
