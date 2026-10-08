@@ -1560,7 +1560,7 @@ class _DashboardPageState extends State<DashboardPage>
                           overflow: TextOverflow.ellipsis,
                         ),
                         Text(
-                          "Biofilter",
+                          "Mint",
                           style: GoogleFonts.poppins(
                             fontSize: 9.5,
                             fontWeight: FontWeight.w500,
