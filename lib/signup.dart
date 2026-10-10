@@ -17,11 +17,17 @@ class SignupPage extends StatefulWidget {
     this.initialMessage,
     this.initialMessageKind = AuthMessageKind.info,
     this.showResendOption = false,
+    this.auth,
+    this.firestore,
   });
 
   final String? initialMessage;
   final AuthMessageKind initialMessageKind;
   final bool showResendOption;
+
+  // Optional dependencies keep authentication tests isolated from live Firebase.
+  final FirebaseAuth? auth;
+  final FirebaseFirestore? firestore;
 
   @override
   State<SignupPage> createState() => _SignupPageState();
@@ -48,7 +54,7 @@ class _SignupPageState extends State<SignupPage>
   late final AnimationController _rippleController;
 
   bool _isSignIn = true;
-  bool _isLoading = false;
+  bool _isLoading = true;
   bool _passwordVisible = false;
   bool _confirmPasswordVisible = false;
   bool _showResendOption = false;
@@ -61,6 +67,9 @@ class _SignupPageState extends State<SignupPage>
   int _remainingLockoutSeconds = 0;
 
   bool get _isLockedOut => _remainingLockoutSeconds > 0;
+  FirebaseAuth get _auth => widget.auth ?? FirebaseAuth.instance;
+  FirebaseFirestore get _firestore =>
+      widget.firestore ?? FirebaseFirestore.instance;
 
   @override
   void initState() {
@@ -89,6 +98,7 @@ class _SignupPageState extends State<SignupPage>
   Future<void> _loadLockoutState() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
       final lockoutMs = prefs.getInt(_prefKeyLockoutUntil);
       final attempts = prefs.getInt(_prefKeyFailedAttempts) ?? 0;
       _failedAttempts = attempts;
@@ -99,10 +109,15 @@ class _SignupPageState extends State<SignupPage>
           _startLockoutTimer();
           return;
         } else {
+          _failedAttempts = 0;
           await _clearLockoutPreferences();
         }
       }
-    } catch (_) {}
+    } catch (_) {
+      // Keep the in-memory attempt limit if local storage is unavailable.
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   Future<void> _clearLockoutPreferences() async {
@@ -145,6 +160,7 @@ class _SignupPageState extends State<SignupPage>
   }
 
   void _startLockoutTimer() {
+    if (!mounted) return;
     _lockoutTimer?.cancel();
     _updateLockoutState();
     if (_remainingLockoutSeconds > 0) {
@@ -236,6 +252,7 @@ class _SignupPageState extends State<SignupPage>
   }
 
   Future<void> _submit() async {
+    if (_isLoading || !mounted) return;
     FocusScope.of(context).unfocus();
     if (_isSignIn && _isLockedOut) {
       _setMessage(
@@ -258,30 +275,30 @@ class _SignupPageState extends State<SignupPage>
   }
 
   Future<void> _signIn() async {
-    if (_isLockedOut) {
-      _setMessage(
-        _lockoutErrorMessage(_remainingLockoutSeconds),
-        AuthMessageKind.error,
-      );
-      return;
-    }
+    var keepSession = false;
     try {
-      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+      final credential = await _auth.signInWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
       await _resetLockout();
       final user = credential.user!;
       await user.reload();
-      final refreshed = FirebaseAuth.instance.currentUser;
+      final refreshed = _auth.currentUser;
 
-      final doc = await FirebaseFirestore.instance
+      final doc = await _firestore
           .collection('users')
           .doc(user.uid)
           .get();
       final data = doc.data() ?? const <String, dynamic>{};
+      if (!doc.exists) {
+        _setMessage(
+          'Your account setup is incomplete. Please contact an admin.',
+          AuthMessageKind.warning,
+        );
+        return;
+      }
       if (data['role'] != 'user') {
-        await FirebaseAuth.instance.signOut();
         _setMessage(
           'This app is for farm users. Admins and technicians can log in on the website.',
           AuthMessageKind.error,
@@ -289,7 +306,6 @@ class _SignupPageState extends State<SignupPage>
         return;
       }
       if (refreshed == null || !refreshed.emailVerified) {
-        await FirebaseAuth.instance.signOut();
         if (!mounted) return;
         setState(() => _showResendOption = true);
         _setMessage(
@@ -302,7 +318,6 @@ class _SignupPageState extends State<SignupPage>
         await doc.reference.update({'emailVerified': true});
       }
       if (data['status'] != 'active') {
-        await FirebaseAuth.instance.signOut();
         _setMessage(
           'Your email is verified. Please wait for an admin to approve your account.',
           AuthMessageKind.warning,
@@ -311,6 +326,7 @@ class _SignupPageState extends State<SignupPage>
       }
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, '/dashboard');
+      keepSession = true;
     } on FirebaseAuthException catch (error) {
       final isWrongCredential = error.code == 'user-not-found' ||
           error.code == 'wrong-password' ||
@@ -340,36 +356,58 @@ class _SignupPageState extends State<SignupPage>
         AuthMessageKind.error,
       );
     } finally {
+      await _finishAuthAttempt(keepSession: keepSession);
+    }
+  }
+
+  Future<void> _finishAuthAttempt({bool keepSession = false}) async {
+    try {
+      // Firebase authenticates before profile/approval checks. Only a completed
+      // dashboard login may retain that session, even if this page was closed.
+      if (!keepSession) await _auth.signOut();
+    } catch (_) {
+      _setMessage(
+        'Unable to finish signing out. Please try again before continuing.',
+        AuthMessageKind.error,
+      );
+    } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
   Future<void> _signUp() async {
+    final email = _emailController.text.trim();
+    final fullName = _nameController.text.trim();
+    final password = _passwordController.text;
+    var accountCreated = false;
+    var profileCreated = false;
     try {
-      final credential = await FirebaseAuth.instance
+      final credential = await _auth
           .createUserWithEmailAndPassword(
-            email: _emailController.text.trim(),
-            password: _passwordController.text,
+            email: email,
+            password: password,
           );
-      await credential.user!.sendEmailVerification();
-      await FirebaseFirestore.instance
+      accountCreated = true;
+      await _firestore
           .collection('users')
           .doc(credential.user!.uid)
           .set({
-            'email': _emailController.text.trim(),
-            'fullName': _nameController.text.trim(),
+            'email': email,
+            'fullName': fullName,
             'role': 'user',
             'status': 'pending',
             'emailVerified': false,
             'createdAt': FieldValue.serverTimestamp(),
           });
-      await FirebaseAuth.instance.signOut();
+      profileCreated = true;
+      // Save the pending profile first so an email-delivery failure can be
+      // recovered using the existing verification-resend flow.
+      await credential.user!.sendEmailVerification();
       if (!mounted) return;
-      final registeredEmail = _emailController.text.trim();
       setState(() {
         _isSignIn = true;
         _nameController.clear();
-        _emailController.text = registeredEmail;
+        _emailController.text = email;
         _passwordController.clear();
         _confirmPasswordController.clear();
         _showResendOption = false;
@@ -379,19 +417,35 @@ class _SignupPageState extends State<SignupPage>
         'Account created. Check your email to verify your account, then wait for admin approval before logging in.',
         AuthMessageKind.success,
       );
-    } on FirebaseAuthException catch (error) {
-      _setMessage(_authErrorMessage(error.code), AuthMessageKind.error);
-    } catch (_) {
-      _setMessage(
-        'Unable to create your account right now. Please try again.',
-        AuthMessageKind.error,
-      );
+    } catch (error) {
+      if (accountCreated) {
+        if (mounted && profileCreated) {
+          setState(() {
+            _isSignIn = true;
+            _showResendOption = true;
+          });
+        }
+        _setMessage(
+          profileCreated
+              ? 'Your account was created, but the verification email could not be sent. Use Resend verification email to try again.'
+              : 'Your account was created, but profile setup could not be completed. Please contact an admin.',
+          AuthMessageKind.warning,
+        );
+      } else {
+        _setMessage(
+          error is FirebaseAuthException
+              ? _authErrorMessage(error.code)
+              : 'Unable to create your account right now. Please try again.',
+          AuthMessageKind.error,
+        );
+      }
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      await _finishAuthAttempt();
     }
   }
 
   Future<void> _resendVerification() async {
+    if (_isLoading || !mounted) return;
     if (_isLockedOut) {
       _setMessage(
         _lockoutErrorMessage(_remainingLockoutSeconds),
@@ -409,13 +463,12 @@ class _SignupPageState extends State<SignupPage>
     }
     setState(() => _isLoading = true);
     try {
-      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+      final credential = await _auth.signInWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
       await _resetLockout();
       await credential.user!.sendEmailVerification();
-      await FirebaseAuth.instance.signOut();
       _setMessage(
         'Verification email sent. Check your inbox for the link.',
         AuthMessageKind.success,
@@ -443,12 +496,18 @@ class _SignupPageState extends State<SignupPage>
       } else {
         _setMessage(_authErrorMessage(error.code), AuthMessageKind.error);
       }
+    } catch (_) {
+      _setMessage(
+        'Unable to send the verification email right now. Please try again.',
+        AuthMessageKind.error,
+      );
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      await _finishAuthAttempt();
     }
   }
 
   Future<void> _resetPassword() async {
+    if (_isLoading || !mounted) return;
     final email = _emailController.text.trim();
     if (!_isValidEmail(email)) {
       _setMessage(
@@ -459,13 +518,18 @@ class _SignupPageState extends State<SignupPage>
     }
     setState(() => _isLoading = true);
     try {
-      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+      await _auth.sendPasswordResetEmail(email: email);
       _setMessage(
         'Password reset email sent. Check your inbox for the link.',
         AuthMessageKind.success,
       );
     } on FirebaseAuthException catch (error) {
       _setMessage(_authErrorMessage(error.code), AuthMessageKind.error);
+    } catch (_) {
+      _setMessage(
+        'Unable to send the password reset email right now. Please try again.',
+        AuthMessageKind.error,
+      );
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -648,7 +712,7 @@ class _SignupPageState extends State<SignupPage>
               if (!_isSignIn) ...[
                 const SizedBox(height: 7),
                 Text(
-                  'Use at least 8 characters. Avoid common passwords and repeated characters.',
+                  'Use at least 8 characters.',
                   style: GoogleFonts.poppins(fontSize: 12, color: _textMuted),
                 ),
                 const SizedBox(height: 22),

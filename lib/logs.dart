@@ -1231,36 +1231,52 @@ class _LogsPageState extends State<LogsPage>
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(color: teal.withValues(alpha: 0.3)),
                     ),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<bool>(
-                        value: _showAllWeeks,
-                        isDense: true,
-                        menuWidth: 150,
-                        icon: Icon(Icons.keyboard_arrow_down, size: 16, color: tealDark),
-                        dropdownColor: Colors.white,
+                    child: PopupMenuButton<bool>(
+                      initialValue: _showAllWeeks,
+                      tooltip: 'Graph view',
+                      // Keep the opened menu inset from the right edge.
+                      offset: const Offset(-16, 0),
+                      constraints: const BoxConstraints.tightFor(width: 150),
+                      color: Colors.white,
+                      shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
-                        style: GoogleFonts.poppins(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: tealDark,
-                        ),
-                        selectedItemBuilder: (context) => const [
-                          Text('Last 3'),
-                          Text('Overall'),
+                      ),
+                      itemBuilder: (context) => [
+                        for (final option in const {false: 'Last 3 Weeks', true: 'Overall'}.entries)
+                          PopupMenuItem<bool>(
+                            value: option.key,
+                            child: Text(
+                              option.value,
+                              style: GoogleFonts.poppins(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: tealDark,
+                              ),
+                            ),
+                          ),
+                      ],
+                      onSelected: (showAllWeeks) {
+                        if (showAllWeeks == _showAllWeeks) {
+                          return;
+                        }
+                        setState(() {
+                          _showAllWeeks = showAllWeeks;
+                          _selectedWeekIndex = null;
+                        });
+                      },
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _showAllWeeks ? 'Overall' : 'Last 3',
+                            style: GoogleFonts.poppins(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: tealDark,
+                            ),
+                          ),
+                          Icon(Icons.keyboard_arrow_down, size: 16, color: tealDark),
                         ],
-                        items: const [
-                          DropdownMenuItem(value: false, child: Text('Last 3 Weeks')),
-                          DropdownMenuItem(value: true, child: Text('Overall')),
-                        ],
-                        onChanged: (showAllWeeks) {
-                          if (showAllWeeks == null || showAllWeeks == _showAllWeeks) {
-                            return;
-                          }
-                          setState(() {
-                            _showAllWeeks = showAllWeeks;
-                            _selectedWeekIndex = null;
-                          });
-                        },
                       ),
                     ),
                   ),

@@ -26,9 +26,7 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
   late AnimationController _fadeController;
 
   late TextEditingController _addressController;
-  late TextEditingController _fullNameController;
   bool _isEditingAddress = false;
-  bool _isEditingFullName = false;
 
   String _fullName = '';
   String _email = '';
@@ -49,7 +47,6 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
     super.initState();
     _scaffoldKey = GlobalKey<ScaffoldState>();
     _addressController = TextEditingController();
-    _fullNameController = TextEditingController();
     _fadeController = AnimationController(
       duration: const Duration(milliseconds: 1000),
       vsync: this,
@@ -74,7 +71,6 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
         _fullName = data['fullName'] ?? '';
         _email = user.email ?? '';
         _role = data['role'] ?? 'user';
-        _fullNameController.text = data['fullName'] ?? '';
         _addressController.text = data['address'] ?? '';
         _isLoading = false;
         _loadError = null;
@@ -100,16 +96,13 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
           .collection('users')
           .doc(user.uid)
           .update({
-        'fullName': _fullNameController.text.trim(),
         'address': _addressController.text.trim(),
       });
 
       if (!mounted) return;
 
       setState(() {
-        _fullName = _fullNameController.text.trim();
         _isSaving = false;
-        _isEditingFullName = false;
         _isEditingAddress = false;
       });
 
@@ -143,7 +136,6 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
   @override
   void dispose() {
     _addressController.dispose();
-    _fullNameController.dispose();
     _fadeController.dispose();
     super.dispose();
   }
@@ -269,7 +261,7 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildFullNameField(),
+                    _buildInfoField("Full Name", _fullName),
                     const SizedBox(height: 16),
                     _buildInfoField("Role", _role),
                     const SizedBox(height: 16),
@@ -384,74 +376,6 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
         if (!mounted) return;
         Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
       },
-    );
-  }
-
-  Widget _buildFullNameField() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              "Full Name",
-              style: GoogleFonts.poppins(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: const Color(0xFF6B7280),
-                letterSpacing: 0.3,
-              ),
-            ),
-            GestureDetector(
-              onTap: () => setState(() => _isEditingFullName = !_isEditingFullName),
-              child: Text(
-                _isEditingFullName ? "Kanselahin" : "Edit",
-                style: GoogleFonts.poppins(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: teal,
-                  letterSpacing: 0.3,
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        _isEditingFullName
-            ? TextField(
-                controller: _fullNameController,
-                textCapitalization: TextCapitalization.words,
-                decoration: InputDecoration(
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(color: teal.withOpacity(0.3)),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(color: teal.withOpacity(0.3)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(color: teal, width: 2),
-                  ),
-                  contentPadding: const EdgeInsets.all(12),
-                ),
-                style: GoogleFonts.poppins(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: const Color(0xFF111827),
-                ),
-              )
-            : Text(
-                _fullNameController.text.isNotEmpty ? _fullNameController.text : _fullName,
-                style: GoogleFonts.poppins(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: const Color(0xFF111827),
-                ),
-              ),
-      ],
     );
   }
 
