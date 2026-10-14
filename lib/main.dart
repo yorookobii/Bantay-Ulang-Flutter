@@ -1,35 +1,99 @@
-import 'package:demo_1_langto/landing_page.dart';
 import 'package:demo_1_langto/login.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'dart:ui' as ui;
 import 'package:google_fonts/google_fonts.dart';
 import 'firebase_options.dart';
 import 'notification_service.dart';
+import 'offline/offline_services.dart';
+import 'offline/local_record_cleanup.dart';
+import 'offline/offline_widgets.dart';
+import 'phone_back_logout.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  GoogleFonts.config.allowRuntimeFetching = false;
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  try {
+    await OfflineServices.initialize();
+  } on LocalRecordCleanupFailure catch (error) {
+    runApp(MaterialApp(home: Scaffold(body: Center(child: Padding(
+      padding: const EdgeInsets.all(24), child: Text(error.toString()),
+    )))));
+    return;
+  } catch (_) {
+    runApp(const MaterialApp(home: Scaffold(body: Center(child: Padding(
+      padding: EdgeInsets.all(24), child: Text('Device storage could not be opened. Free some storage and reopen Bantay Ulang.'),
+    )))));
+    return;
+  }
   await NotificationService.instance.initialize();
   runApp(const MyApp());
+  await OfflineServices.current!.start();
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  final _messengerKey = GlobalKey<ScaffoldMessengerState>();
+  late final PhoneBackLogoutCoordinator _phoneBack;
+
+  @override
+  void initState() {
+    super.initState();
+    final services = OfflineServices.current;
+    _phoneBack = PhoneBackLogoutCoordinator(
       navigatorKey: NotificationService.navigatorKey,
-      debugShowCheckedModeBanner: false,
-      home: const LoginPage(),
-      routes: {
-        '/login': (context) => const LoginPage(),
-        '/dashboard': (context) => const DashboardPage(),
-        '/admin': (context) => const DashboardPage(),
-      },
+      messengerKey: _messengerKey,
+      session: services?.session,
+      logout: () => services?.logout() ?? FirebaseAuth.instance.signOut(),
+    )..start();
+  }
+
+  @override
+  void dispose() {
+    _phoneBack.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PhoneBackLogoutScope(
+      coordinator: _phoneBack,
+      child: MaterialApp(
+        navigatorKey: NotificationService.navigatorKey,
+        scaffoldMessengerKey: _messengerKey,
+        navigatorObservers: [_phoneBack],
+        onNavigationNotification: _phoneBack.onNavigationNotification,
+        theme: ThemeData(
+          pageTransitionsTheme: PageTransitionsTheme(
+            builders: {
+              ...const PageTransitionsTheme().builders,
+              // The coordinator handles committed system gestures itself.
+              TargetPlatform.android: const FadeForwardsPageTransitionsBuilder(),
+            },
+          ),
+        ),
+        debugShowCheckedModeBanner: false,
+        home: const SessionEntry(),
+        builder: (context, child) => SessionNavigationGuard(
+          child: SessionOfflineNotice(child: child!),
+        ),
+        routes: {
+          '/login': (context) => const LoginPage(),
+          '/session': (context) => const SessionEntry(),
+          '/dashboard': (context) => const SessionEntry(),
+          '/admin': (context) => const SessionEntry(),
+        },
+      ),
     );
   }
 }

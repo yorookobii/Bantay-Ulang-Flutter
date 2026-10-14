@@ -1,11 +1,18 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'offline/offline_services.dart';
+import 'offline/offline_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'landing_page.dart';
 import 'tasks.dart';
 import 'yield.dart';
 import 'logs.dart';
+import 'logout_confirmation_dialog.dart';
+import 'phone_back_logout.dart';
+
+export 'logout_confirmation_dialog.dart'
+    show LogoutConfirmationDialog, showLogoutConfirmationDialog;
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({Key? key}) : super(key: key);
@@ -32,6 +39,7 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
   String _email = '';
   String _role = '';
   bool _isLoading = true;
+  final _cacheStatus = CacheStatus('profile');
   bool _isSaving = false;
   String? _loadError;
 
@@ -62,10 +70,12 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
       final doc = await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
-          .get();
+          .get(GetOptions(source: OfflineServices.current?.session.online == false ? Source.cache : Source.serverAndCache));
 
-      if (!mounted) return;
+      if (!mounted || !_cacheStatus.isCurrent) return;
 
+      _cacheStatus.observe(doc.metadata, hasData: doc.exists);
+      if (!doc.exists) throw StateError('No saved profile on this device');
       final data = doc.data() ?? {};
       setState(() {
         _fullName = data['fullName'] ?? '';
@@ -76,11 +86,12 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
         _loadError = null;
       });
     } catch (e) {
+      _cacheStatus.reportError(e);
       debugPrint('Failed to load user data: $e');
-      if (!mounted) return;
+      if (!mounted || !_cacheStatus.isCurrent) return;
       setState(() {
         _isLoading = false;
-        _loadError = 'Hindi ma-load ang profile. Subukan muli.';
+        _loadError = OfflineServices.current?.session.online == false ? 'No saved profile on this device. Connect once to download it.' : 'Hindi ma-load ang profile. Subukan muli.';
       });
     }
   }
@@ -92,14 +103,21 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
     setState(() => _isSaving = true);
 
     try {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .update({
-        'address': _addressController.text.trim(),
+      final session = OfflineServices.current?.session;
+      if (session != null && !await session.refresh()) {
+        throw StateError('Profile changes require an internet connection.');
+      }
+      final ref = FirebaseFirestore.instance.collection('users').doc(user.uid);
+      final address = _addressController.text.trim();
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        final profile = await tx.get(ref);
+        if (profile.data()?['status'] != 'active' || profile.data()?['role'] != 'user') {
+          throw FirebaseException(plugin: 'cloud_firestore', code: 'permission-denied');
+        }
+        tx.update(ref, {'address': address});
       });
 
-      if (!mounted) return;
+      if (!mounted || !_cacheStatus.isCurrent) return;
 
       setState(() {
         _isSaving = false;
@@ -114,13 +132,14 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
         ),
       );
     } catch (e) {
+      _cacheStatus.reportError(e);
       debugPrint('Failed to update profile: $e');
-      if (!mounted) return;
+      if (!mounted || !_cacheStatus.isCurrent) return;
       setState(() => _isSaving = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Hindi ma-update ang profile. Subukan muli.',
+            'Profile changes require internet and an approved account. Your entered address has been kept.',
             style: GoogleFonts.poppins(),
           ),
           backgroundColor: const Color(0xFFDC2626),
@@ -135,6 +154,7 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
 
   @override
   void dispose() {
+    _cacheStatus.dispose();
     _addressController.dispose();
     _fadeController.dispose();
     super.dispose();
@@ -263,7 +283,7 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
                   children: [
                     _buildInfoField("Full Name", _fullName),
                     const SizedBox(height: 16),
-                    _buildInfoField("Role", _role),
+                    _buildInfoField("Role", _role == 'user' ? 'Practitioner' : _role),
                     const SizedBox(height: 16),
                     _buildInfoField("Email Address", _email),
                     const SizedBox(height: 16),
@@ -369,11 +389,20 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
   }
 
   void _showLogoutConfirmationDialog() {
+    final coordinator = PhoneBackLogoutScope.maybeOf(context);
+    if (coordinator != null) {
+      coordinator.requestLogout(context);
+      return;
+    }
     showLogoutConfirmationDialog(
       context,
       onConfirm: () async {
-        await FirebaseAuth.instance.signOut();
-        if (!mounted) return;
+        if (OfflineServices.current != null) {
+          await OfflineServices.current!.logout();
+        } else {
+          await FirebaseAuth.instance.signOut();
+        }
+        if (!mounted || !_cacheStatus.isCurrent) return;
         Navigator.pushNamedAndRemoveUntil(context, '/login', (route) => false);
       },
     );
@@ -673,115 +702,4 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
       ),
     );
   }
-}
-
-class LogoutConfirmationDialog extends StatelessWidget {
-  final VoidCallback? onConfirm;
-
-  const LogoutConfirmationDialog({super.key, this.onConfirm});
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-      ),
-      backgroundColor: Colors.white,
-      surfaceTintColor: Colors.transparent,
-      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-      actionsPadding: const EdgeInsets.fromLTRB(24, 16, 24, 20),
-      title: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: const BoxDecoration(
-              color: Color(0xFFFEE2E2),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.logout_rounded,
-              color: Color(0xFFEF4444),
-              size: 22,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Text(
-            "Confirm Logout",
-            style: GoogleFonts.poppins(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-              color: const Color(0xFF1E293B),
-            ),
-          ),
-        ],
-      ),
-      content: Text(
-        "Are you sure you want to log out?",
-        style: GoogleFonts.poppins(
-          fontSize: 14,
-          color: const Color(0xFF64748B),
-          height: 1.4,
-        ),
-      ),
-      actions: [
-        TextButton(
-          key: const Key('logout_no_button'),
-          onPressed: () => Navigator.of(context).pop(false),
-          style: TextButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-              side: BorderSide(color: Colors.grey.shade300),
-            ),
-          ),
-          child: Text(
-            "No",
-            style: GoogleFonts.poppins(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: const Color(0xFF64748B),
-            ),
-          ),
-        ),
-        ElevatedButton(
-          key: const Key('logout_yes_button'),
-          onPressed: () {
-            Navigator.of(context).pop(true);
-            onConfirm?.call();
-          },
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFFEF4444),
-            foregroundColor: Colors.white,
-            elevation: 0,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ),
-          child: Text(
-            "Yes, Log Out",
-            style: GoogleFonts.poppins(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: Colors.white,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-Future<bool?> showLogoutConfirmationDialog(
-  BuildContext context, {
-  VoidCallback? onConfirm,
-}) {
-  return showDialog<bool>(
-    context: context,
-    barrierDismissible: true,
-    builder: (BuildContext dialogContext) => LogoutConfirmationDialog(
-      onConfirm: onConfirm,
-    ),
-  );
 }

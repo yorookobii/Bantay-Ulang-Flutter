@@ -35,7 +35,7 @@ void main() {
       expect(
         refreshMethod,
         contains(
-          'The data is up to date and matches the latest readings.',
+          'The data is up to date.',
         ),
       );
       expect(

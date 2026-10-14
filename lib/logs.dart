@@ -4,9 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'offline/offline_services.dart';
+import 'offline/offline_widgets.dart';
+import 'offline/offline_models.dart';
+import 'offline/session_controller.dart';
 
 class LogsPage extends StatefulWidget {
-  const LogsPage({super.key});
+  const LogsPage({super.key, this.firestore});
+  final FirebaseFirestore? firestore;
 
   @override
   State<LogsPage> createState() => _LogsPageState();
@@ -14,6 +19,8 @@ class LogsPage extends StatefulWidget {
 
 class _LogsPageState extends State<LogsPage>
     with SingleTickerProviderStateMixin {
+  FirebaseFirestore get _firestore => widget.firestore ?? FirebaseFirestore.instance;
+  String get _owner => OfflineServices.current?.session.uid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
   final Color tealLight = const Color(0xFFE6FFF9);
   final Color teal = const Color(0xFF0D9488);
   final Color tealDark = const Color(0xFF0F766E);
@@ -40,6 +47,11 @@ class _LogsPageState extends State<LogsPage>
 
   // Growth indicators state for cycle tracking
   DateTime? _cycleStart;
+  String? _cycleId;
+  final _cacheStatus = CacheStatus('logs');
+  final _growthCache = CacheStatus('growth_records');
+  final _mortalityCache = CacheStatus('mortality_records');
+  final _cycleCache = CacheStatus('growth_indicators');
   StreamSubscription<QuerySnapshot>? _indicatorsSub;
 
   // Weekly growth chart state
@@ -105,15 +117,16 @@ class _LogsPageState extends State<LogsPage>
   }
 
   void _subscribeLogs() {
-    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    _logsSub = FirebaseFirestore.instance
+    final uid = _owner;
+    _logsSub = _firestore
         .collection('logs')
         .where('createdBy', isEqualTo: uid)
         .orderBy('createdAt', descending: true)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .listen(
           (snapshot) {
-            if (!mounted) return;
+            if (!mounted || !_cacheStatus.isCurrent) return;
+            _cacheStatus.observe(snapshot.metadata, hasData: snapshot.docs.isNotEmpty);
             setState(() {
               _isLoading = false;
               _errorMessage = null;
@@ -128,6 +141,7 @@ class _LogsPageState extends State<LogsPage>
             });
           },
           onError: (error) {
+            _cacheStatus.reportError(error);
             debugPrint('Logs subscription error: $error');
             if (mounted) {
               setState(() {
@@ -140,54 +154,84 @@ class _LogsPageState extends State<LogsPage>
   }
 
   void _subscribeGrowthRecords() {
-    _growthRecordsSub = FirebaseFirestore.instance
+    _growthRecordsSub = _firestore
         .collection('ulang_growth_records')
         .orderBy('createdAt', descending: true)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .listen(
-          (snapshot) {
-            if (!mounted) return;
+          (snapshot) async {
+            await _growthCache.loaded;
+            if (!mounted || !_cacheStatus.isCurrent) return;
+            if (!_growthCache.canUse(snapshot.metadata)) {
+              _growthCache.observe(snapshot.metadata, hasData: false);
+              setState(() { _ulangGrowthRecords = []; });
+              return;
+            }
+            _growthCache.observe(snapshot.metadata, hasData: snapshot.docs.isNotEmpty);
             setState(() => _ulangGrowthRecords = snapshot.docs);
           },
-          onError: (error) =>
-              debugPrint('Growth records subscription error: $error'),
+          onError: (error) {
+            _cacheStatus.reportError(error);
+            debugPrint('Growth records subscription error: $error');
+          },
         );
   }
 
   void _subscribeMortalityRecords() {
-    _mortalityRecordsSub = FirebaseFirestore.instance
+    _mortalityRecordsSub = _firestore
         .collection('mortality_records')
         .orderBy('createdAt', descending: true)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .listen(
-          (snapshot) {
-            if (!mounted) return;
+          (snapshot) async {
+            await _mortalityCache.loaded;
+            if (!mounted || !_cacheStatus.isCurrent) return;
+            if (!_mortalityCache.canUse(snapshot.metadata)) {
+              _mortalityCache.observe(snapshot.metadata, hasData: false);
+              setState(() { _mortalityRecords = []; });
+              return;
+            }
+            _mortalityCache.observe(snapshot.metadata, hasData: snapshot.docs.isNotEmpty);
             setState(() => _mortalityRecords = snapshot.docs);
           },
-          onError: (error) =>
-              debugPrint('Mortality records subscription error: $error'),
+          onError: (error) {
+            _cacheStatus.reportError(error);
+            debugPrint('Mortality records subscription error: $error');
+          },
         );
   }
 
   void _subscribeGrowthIndicators() {
-    _indicatorsSub = FirebaseFirestore.instance
+    _indicatorsSub = _firestore
         .collection('growth_indicators')
         .orderBy('timestamp', descending: true)
         .limit(1)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .listen(
-          (snapshot) {
-            if (!mounted) return;
+          (snapshot) async {
+            await _cycleCache.loaded;
+            if (!mounted || !_cacheStatus.isCurrent) return;
+            if (!_cycleCache.canUse(snapshot.metadata)) {
+              _cycleCache.observe(snapshot.metadata, hasData: false);
+              setState(() { _cycleStart = null; _cycleId = null; });
+              return;
+            }
+            _cycleCache.observe(snapshot.metadata, hasData: snapshot.docs.isNotEmpty);
             if (snapshot.docs.isNotEmpty) {
               final data = snapshot.docs.first.data();
               final cycleStartTs = data['cycleStart'] as Timestamp?;
               setState(() {
                 _cycleStart = cycleStartTs?.toDate();
+                _cycleId = snapshot.docs.first.id;
               });
+            } else {
+              setState(() { _cycleStart = null; _cycleId = null; });
             }
           },
-          onError: (error) =>
-              debugPrint('Growth indicators subscription error: $error'),
+          onError: (error) {
+            _cacheStatus.reportError(error);
+            debugPrint('Growth indicators subscription error: $error');
+          },
         );
   }
 
@@ -195,25 +239,29 @@ class _LogsPageState extends State<LogsPage>
     if (_isRefreshingChart) return;
     setState(() => _isRefreshingChart = true);
     try {
-      final recordsSnap = await FirebaseFirestore.instance
+      if (OfflineServices.current?.session.online == false) {
+        _showSuccessSnackbar('Showing saved data. Connect to refresh.');
+        return;
+      }
+      final recordsSnap = await _firestore
           .collection('ulang_growth_records')
           .orderBy('createdAt', descending: true)
-          .get();
+          .get(const GetOptions(source: Source.server)).timeout(const Duration(seconds: 10));
 
-      final indicatorsSnap = await FirebaseFirestore.instance
+      final indicatorsSnap = await _firestore
           .collection('growth_indicators')
           .orderBy('timestamp', descending: true)
           .limit(1)
-          .get();
+          .get(const GetOptions(source: Source.server)).timeout(const Duration(seconds: 10));
 
-      final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-      final logsSnap = await FirebaseFirestore.instance
+      final uid = _owner;
+      final logsSnap = await _firestore
           .collection('logs')
           .where('createdBy', isEqualTo: uid)
           .orderBy('createdAt', descending: true)
-          .get();
+          .get(const GetOptions(source: Source.server)).timeout(const Duration(seconds: 10));
 
-      if (!mounted) return;
+      if (!mounted || !_cacheStatus.isCurrent) return;
       setState(() {
         _ulangGrowthRecords = recordsSnap.docs;
         _ulangLogs = logsSnap.docs.where((d) {
@@ -228,11 +276,19 @@ class _LogsPageState extends State<LogsPage>
           final data = indicatorsSnap.docs.first.data();
           final cycleStartTs = data['cycleStart'] as Timestamp?;
           _cycleStart = cycleStartTs?.toDate();
+          _cycleId = indicatorsSnap.docs.first.id;
+        } else {
+          _cycleStart = null;
+          _cycleId = null;
         }
         _selectedWeekIndex = null;
       });
+      _cacheStatus.observe(logsSnap.metadata, hasData: logsSnap.docs.isNotEmpty);
+      _growthCache.observe(recordsSnap.metadata, hasData: recordsSnap.docs.isNotEmpty);
+      _cycleCache.observe(indicatorsSnap.metadata, hasData: indicatorsSnap.docs.isNotEmpty);
       _showSuccessSnackbar("Matagumpay na na-refresh ang graph at mga tala.");
     } catch (e) {
+      _cacheStatus.reportError(e);
       debugPrint('Error refreshing data: $e');
       if (mounted) {
         _showErrorSnackbar("Hindi ma-refresh ang data. Subukan muli.");
@@ -246,62 +302,12 @@ class _LogsPageState extends State<LogsPage>
     return (date.difference(cycleStart).inDays ~/ 7) + 1;
   }
 
-  Future<void> _recalculateAndUpdateGrowthIndicators() async {
-    debugPrint('[recalc] entered _recalculateAndUpdateGrowthIndicators');
-    try {
-      final indicatorsSnap = await FirebaseFirestore.instance
-          .collection('growth_indicators')
-          .orderBy('timestamp', descending: true)
-          .limit(1)
-          .get();
-      debugPrint('[recalc] growth_indicators docs found: ${indicatorsSnap.docs.length}');
-
-      if (indicatorsSnap.docs.isEmpty) return;
-
-      final indicatorDoc = indicatorsSnap.docs.first;
-      final data = indicatorDoc.data() as Map<String, dynamic>;
-      final initialStock = (data['initialStock'] as num?)?.toDouble() ?? 0;
-      final cycleStartTs = data['cycleStart'] as Timestamp?;
-      debugPrint('[recalc] initialStock=$initialStock, cycleStartTs=$cycleStartTs');
-
-      if (cycleStartTs == null) return;
-      final cycleStart = cycleStartTs.toDate();
-      debugPrint('[recalc] cycleStart=$cycleStart');
-
-      final updates = <String, dynamic>{};
-
-      final mortalitySnap = await FirebaseFirestore.instance
-          .collection('mortality_records')
-          .where(
-            'createdAt',
-            isGreaterThanOrEqualTo: Timestamp.fromDate(cycleStart),
-          )
-          .get();
-      int totalDeaths = 0;
-      for (final doc in mortalitySnap.docs) {
-        totalDeaths += ((doc.data()['deathCount'] as num?)?.toInt() ?? 0);
-      }
-      debugPrint('[recalc] mortality_records docs found: ${mortalitySnap.docs.length}, totalDeaths=$totalDeaths');
-      double? survivalRate;
-      if (initialStock > 0) {
-        survivalRate = (((initialStock - totalDeaths) / initialStock) * 100)
-            .clamp(0, 100);
-        updates['survivalRate'] = survivalRate;
-      }
-      debugPrint('[recalc] survivalRate computed=$survivalRate');
-
-      debugPrint('[recalc] updates map to write: $updates');
-      if (updates.isNotEmpty) {
-        await indicatorDoc.reference.update(updates);
-        debugPrint('[recalc] update() succeeded');
-      }
-    } catch (e) {
-      debugPrint('Failed to recalculate growth indicators: $e');
-    }
-  }
-
   @override
   void dispose() {
+    _cacheStatus.dispose();
+    _cycleCache.dispose();
+    _growthCache.dispose();
+    _mortalityCache.dispose();
     _logsSub?.cancel();
     _growthRecordsSub?.cancel();
     _mortalityRecordsSub?.cancel();
@@ -320,13 +326,16 @@ class _LogsPageState extends State<LogsPage>
 
   Future<void> _saveUlangLog() async {
     if (_isSavingUlang) return;
+    if (!_requireOnlineRecording()) return;
 
     final sizeText = sizeController.text.trim();
     final weightText = weightController.text.trim();
 
     // Check for empty inputs before proceeding
     if (sizeText.isEmpty || weightText.isEmpty) {
-      _showErrorSnackbar("May mga patlang na walang laman. Punan bago magpatuloy.");
+      _showErrorSnackbar(
+        "May mga patlang na walang laman. Punan bago magpatuloy.",
+      );
       return;
     }
 
@@ -348,37 +357,19 @@ class _LogsPageState extends State<LogsPage>
     }
 
     setState(() => _isSavingUlang = true);
+    final session = OfflineServices.current!.session;
+    final owner = session.uid!;
+    final epoch = session.accessEpoch;
     try {
-      final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-      final logger = await _currentLoggerIdentity();
-      final observedAt = Timestamp.fromDate(DateTime.now());
-
-      await FirebaseFirestore.instance.collection('logs').add({
-        'title': 'Ulang Log',
-        'description': 'Laki: ${sizeText}cm • Timbang: ${weightText}g',
-        'type': 'ulang',
-        'createdAt': FieldValue.serverTimestamp(),
-        'createdBy': uid,
-        'createdByName': logger.name,
-        'createdByEmail': logger.email,
-        'size': sizeText,
-        'weight': weightText,
-        'observedAt': observedAt,
-      });
-
-      await FirebaseFirestore.instance.collection('ulang_growth_records').add({
-        'size': sizeNum,
-        'weight': weightNum,
-        'recordedBy': uid,
-        'createdAt': FieldValue.serverTimestamp(),
-        'observedAt': observedAt,
-      });
-
-      await _recalculateAndUpdateGrowthIndicators();
-
+      final warning = await OfflineServices.current!.submitOnline(OperationKind.ulang, {
+        'size': sizeText, 'weight': weightText,
+      }, isCurrent: () => _recordingIsCurrent(owner, epoch));
+      if (!_recordingIsCurrent(owner, epoch)) return;
       sizeController.clear();
       weightController.clear();
-      _showSuccessSnackbar("Matagumpay na na-save ang tala ng Ulang.");
+      _showSuccessSnackbar(warning ?? 'Matagumpay na na-save ang tala ng Ulang.');
+    } catch (error) {
+      if (_recordingIsCurrent(owner, epoch)) _showRecordingError(error);
     } finally {
       if (mounted) setState(() => _isSavingUlang = false);
     }
@@ -386,6 +377,7 @@ class _LogsPageState extends State<LogsPage>
 
   Future<void> _saveMortalityLog() async {
     if (_isSavingMortality) return;
+    if (!_requireOnlineRecording()) return;
 
     final deathText = mortalityController.text.trim();
 
@@ -403,84 +395,32 @@ class _LogsPageState extends State<LogsPage>
       return;
     }
 
+    final cycleStart = _cycleStart;
+    final cycleId = _cycleId;
+    if (cycleStart == null || cycleId == null) {
+      _showErrorSnackbar('Connect to load the current farming cycle before recording mortality.');
+      return;
+    }
+    final observedAt = DateTime.now();
+    final weekNumber = _weekNumberFor(observedAt, cycleStart);
+    if (weekNumber < 1) {
+      _showErrorSnackbar('The farming cycle has not started yet.');
+      return;
+    }
     setState(() => _isSavingMortality = true);
+    final session = OfflineServices.current!.session;
+    final owner = session.uid!;
+    final epoch = session.accessEpoch;
     try {
-      final indicatorsSnap = await FirebaseFirestore.instance
-          .collection('growth_indicators')
-          .orderBy('timestamp', descending: true)
-          .limit(1)
-          .get();
-
-      if (indicatorsSnap.docs.isEmpty) {
-        _showErrorSnackbar(
-          "Itakda muna ang petsa ng simula ng cycle sa Settings.",
-        );
-        return;
-      }
-      final data = indicatorsSnap.docs.first.data() as Map<String, dynamic>;
-      final cycleStartTs = data['cycleStart'] as Timestamp?;
-      if (cycleStartTs == null) {
-        _showErrorSnackbar(
-          "Itakda muna ang petsa ng simula ng cycle sa Settings.",
-        );
-        return;
-      }
-      final cycleStart = cycleStartTs.toDate();
-      final weekNumber = _weekNumberFor(DateTime.now(), cycleStart);
-
-      final existingSnap = await FirebaseFirestore.instance
-          .collection('mortality_records')
-          .where(
-            'createdAt',
-            isGreaterThanOrEqualTo: Timestamp.fromDate(cycleStart),
-          )
-          .get();
-      final alreadyLogged = existingSnap.docs.any(
-        (doc) => (doc.data()['weekNumber'] as num?)?.toInt() == weekNumber,
-      );
-      if (alreadyLogged) {
-        _showErrorSnackbar(
-          "May naitala na para sa linggong ito. Hintayin ang susunod na linggo.",
-        );
-        return;
-      }
-
-      final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-      await FirebaseFirestore.instance.collection('mortality_records').add({
-        'deathCount': deathCount,
-        'weekNumber': weekNumber,
-        'recordedBy': uid,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      final logger = await _currentLoggerIdentity();
-      await FirebaseFirestore.instance.collection('logs').add({
-        'title': 'Mortality Log',
-        'description': 'Namatay: $deathCount ulang • Linggo: $weekNumber',
-        'type': 'mortality',
-        'createdAt': FieldValue.serverTimestamp(),
-        'createdBy': uid,
-        'createdByName': logger.name,
-        'createdByEmail': logger.email,
-        'deathCount': deathCount,
-        'weekNumber': weekNumber,
-        'observedAt': Timestamp.fromDate(DateTime.now()),
-      });
-
-      await _recalculateAndUpdateGrowthIndicators();
-
+      final warning = await OfflineServices.current!.submitOnline(OperationKind.mortality, {
+        'deathCount': deathCount, 'weekNumber': weekNumber,
+        'cycleId': cycleId, 'cycleStart': cycleStart.millisecondsSinceEpoch,
+      }, observedAt: observedAt, isCurrent: () => _recordingIsCurrent(owner, epoch));
+      if (!_recordingIsCurrent(owner, epoch)) return;
       mortalityController.clear();
-      _showSuccessSnackbar("Matagumpay na na-save ang tala ng namatay.");
-    } on FirebaseException catch (e) {
-      if (!mounted) return;
-      _showErrorSnackbar(
-        e.code == 'permission-denied'
-            ? "Walang pahintulot na i-save ang mortality log. Kontakin ang admin."
-            : "Hindi na-save ang mortality log: ${e.message ?? e.code}",
-      );
-    } catch (e) {
-      if (!mounted) return;
-      _showErrorSnackbar("Hindi na-save ang mortality log. Subukan muli.");
+      _showSuccessSnackbar(warning ?? 'Matagumpay na na-save ang tala ng Mortality.');
+    } catch (error) {
+      if (_recordingIsCurrent(owner, epoch)) _showRecordingError(error);
     } finally {
       if (mounted) setState(() => _isSavingMortality = false);
     }
@@ -488,15 +428,18 @@ class _LogsPageState extends State<LogsPage>
 
   Future<void> _savePlantLog() async {
     if (_isSavingPlant) return;
+    if (!_requireOnlineRecording()) return;
 
     final heightText = plantHeightController.text.trim();
 
     // Check for empty inputs before proceeding
-    if (selectedPlantName == null || 
-        heightText.isEmpty || 
-        selectedPlantStage == null || 
+    if (selectedPlantName == null ||
+        heightText.isEmpty ||
+        selectedPlantStage == null ||
         selectedPlantCondition == null) {
-      _showErrorSnackbar("May mga patlang na walang laman. Punan bago magpatuloy.");
+      _showErrorSnackbar(
+        "May mga patlang na walang laman. Punan bago magpatuloy.",
+      );
       return;
     }
 
@@ -524,31 +467,24 @@ class _LogsPageState extends State<LogsPage>
     }
 
     setState(() => _isSavingPlant = true);
+    final session = OfflineServices.current!.session;
+    final owner = session.uid!;
+    final epoch = session.accessEpoch;
     try {
-      final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-      final logger = await _currentLoggerIdentity();
-      await FirebaseFirestore.instance.collection('logs').add({
-        'title': selectedPlantName!,
-        'description':
-            'Taas: ${heightText}cm • Yugto: $selectedPlantStage • Kondisyon: $selectedPlantCondition',
-        'type': 'plant',
-        'createdAt': FieldValue.serverTimestamp(),
-        'createdBy': uid,
-        'createdByName': logger.name,
-        'createdByEmail': logger.email,
-        'plantName': selectedPlantName,
-        'height': heightText,
-        'condition': selectedPlantCondition,
-        'stage': selectedPlantStage,
-        'observedAt': Timestamp.fromDate(DateTime.now()),
-      });
+      final warning = await OfflineServices.current!.submitOnline(OperationKind.plant, {
+        'plantName': selectedPlantName!, 'height': heightText,
+        'stage': selectedPlantStage!, 'condition': selectedPlantCondition!,
+      }, isCurrent: () => _recordingIsCurrent(owner, epoch));
+      if (!_recordingIsCurrent(owner, epoch)) return;
       plantHeightController.clear();
       setState(() {
         selectedPlantName = null;
         selectedPlantStage = null;
         selectedPlantCondition = null;
       });
-      _showSuccessSnackbar("Matagumpay na na-save ang tala ng Tanim.");
+      _showSuccessSnackbar(warning ?? 'Matagumpay na na-save ang tala ng Tanim.');
+    } catch (error) {
+      if (_recordingIsCurrent(owner, epoch)) _showRecordingError(error);
     } finally {
       if (mounted) setState(() => _isSavingPlant = false);
     }
@@ -558,26 +494,39 @@ class _LogsPageState extends State<LogsPage>
   // Logic Helpers
   // =======================
 
-  Future<({String name, String email})> _currentLoggerIdentity() async {
-    final user = FirebaseAuth.instance.currentUser;
-    var name = user?.displayName?.trim() ?? '';
-    var email = user?.email?.trim() ?? '';
-
-    if (user != null) {
-      try {
-        final profile = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .get();
-        final data = profile.data();
-        name = (data?['fullName'] as String?)?.trim() ?? name;
-        email = (data?['email'] as String?)?.trim() ?? email;
-      } catch (error) {
-        debugPrint('Could not load logger profile: $error');
-      }
+  bool _requireOnlineRecording() {
+    final session = OfflineServices.current?.session;
+    if (session?.online != true) {
+      _showErrorSnackbar('Internet connection is required.');
+      return false;
     }
+    return session!.canAccess && session.uid != null && _cacheStatus.isCurrent;
+  }
 
-    return (name: name, email: email);
+  bool _recordingIsCurrent(String owner, int epoch) {
+    final session = OfflineServices.current?.session;
+    return mounted &&
+        _cacheStatus.isCurrent &&
+        session?.canAccess == true &&
+        session?.uid == owner &&
+        session?.accessEpoch == epoch;
+  }
+
+  void _showRecordingError(Object error) {
+    debugPrint('Log recording failed: $error');
+    _showErrorSnackbar(
+      isNetworkFailure(error)
+          ? 'Internet connection is required.'
+          : error is SyncConflict
+          ? error.message
+          : error is FirebaseException && error.code == 'permission-denied'
+          ? 'Firebase denied permission to save this record. Your entered values have been kept. Please contact the admin.'
+          : error is FirebaseException && error.code == 'unauthenticated'
+          ? 'Your login could not be verified. Your entered values have been kept. Please log in online again.'
+          : error is FirebaseException && error.code == 'failed-precondition'
+          ? 'Firebase could not complete the save (failed-precondition). Your entered values have been kept. Please contact the admin.'
+          : 'The save could not be confirmed. Your entered values have been kept. Check the records before submitting again.',
+    );
   }
 
   String _loggerLabel(Map<String, dynamic> data) {
@@ -685,7 +634,7 @@ class _LogsPageState extends State<LogsPage>
   }
 
   void _showSuccessSnackbar(String message) {
-    if (!mounted) return;
+    if (!mounted || !_cacheStatus.isCurrent) return;
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -710,7 +659,7 @@ class _LogsPageState extends State<LogsPage>
   }
 
   void _showErrorSnackbar(String message) {
-    if (!mounted) return;
+    if (!mounted || !_cacheStatus.isCurrent) return;
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -1728,7 +1677,7 @@ class _LogsPageState extends State<LogsPage>
     final data = doc.data() as Map<String, dynamic>;
     final deathCount = data['deathCount'] ?? 0;
     final weekNumber = data['weekNumber'] ?? '—';
-    final ts = data['createdAt'] as Timestamp?;
+    final ts = (data['observedAt'] ?? data['createdAt']) as Timestamp?;
     final date = ts?.toDate();
     final formattedDate = date != null
         ? '${date.month}/${date.day}/${date.year}'

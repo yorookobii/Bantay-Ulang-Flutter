@@ -11,6 +11,7 @@ class NotificationService {
       GlobalKey<NavigatorState>();
 
   VoidCallback? onNavigateToTasks;
+  bool Function()? canNavigateToTasks;
   bool _pendingNavigationToTasks = false;
 
   bool consumePendingNavigationToTasks() {
@@ -94,7 +95,7 @@ class NotificationService {
   }
 
   void navigateToTasks() {
-    if (onNavigateToTasks != null) {
+    if (canNavigateToTasks?.call() != false && onNavigateToTasks != null) {
       onNavigateToTasks!();
       return;
     }

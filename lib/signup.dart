@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'password_validation.dart';
+import 'offline/offline_services.dart';
 
 enum AuthMessageKind { success, error, warning, info }
 
@@ -33,8 +34,7 @@ class SignupPage extends StatefulWidget {
   State<SignupPage> createState() => _SignupPageState();
 }
 
-class _SignupPageState extends State<SignupPage>
-    with SingleTickerProviderStateMixin {
+class _SignupPageState extends State<SignupPage> {
   static const Color _teal = Color(0xFF0D9488);
   static const Color _tealDark = Color(0xFF0F766E);
   static const Color _seaBlue = Color(0xFF0369A1);
@@ -51,7 +51,6 @@ class _SignupPageState extends State<SignupPage>
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
-  late final AnimationController _rippleController;
 
   bool _isSignIn = true;
   bool _isLoading = true;
@@ -74,10 +73,6 @@ class _SignupPageState extends State<SignupPage>
   @override
   void initState() {
     super.initState();
-    _rippleController = AnimationController(
-      duration: const Duration(seconds: 4),
-      vsync: this,
-    )..repeat();
     _message = widget.initialMessage;
     _messageKind = widget.initialMessageKind;
     _showResendOption = widget.showResendOption;
@@ -87,7 +82,6 @@ class _SignupPageState extends State<SignupPage>
   @override
   void dispose() {
     _lockoutTimer?.cancel();
-    _rippleController.dispose();
     _nameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
@@ -277,6 +271,7 @@ class _SignupPageState extends State<SignupPage>
   Future<void> _signIn() async {
     var keepSession = false;
     try {
+      await OfflineServices.current?.session.beginAuthAttempt();
       final credential = await _auth.signInWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text,
@@ -289,7 +284,7 @@ class _SignupPageState extends State<SignupPage>
       final doc = await _firestore
           .collection('users')
           .doc(user.uid)
-          .get();
+          .get(const GetOptions(source: Source.server));
       final data = doc.data() ?? const <String, dynamic>{};
       if (!doc.exists) {
         _setMessage(
@@ -325,7 +320,10 @@ class _SignupPageState extends State<SignupPage>
         return;
       }
       if (!mounted) return;
-      Navigator.pushReplacementNamed(context, '/dashboard');
+      await OfflineServices.current?.session.acceptLogin(user.uid, data,
+        emailVerified: refreshed.emailVerified);
+      if (!mounted) return;
+      Navigator.pushNamedAndRemoveUntil(context, '/dashboard', (_) => false);
       keepSession = true;
     } on FirebaseAuthException catch (error) {
       final isWrongCredential = error.code == 'user-not-found' ||
@@ -372,6 +370,7 @@ class _SignupPageState extends State<SignupPage>
       );
     } finally {
       if (mounted) setState(() => _isLoading = false);
+      OfflineServices.current?.session.endAuthAttempt();
     }
   }
 
@@ -382,6 +381,7 @@ class _SignupPageState extends State<SignupPage>
     var accountCreated = false;
     var profileCreated = false;
     try {
+      await OfflineServices.current?.session.beginAuthAttempt();
       final credential = await _auth
           .createUserWithEmailAndPassword(
             email: email,
@@ -463,6 +463,7 @@ class _SignupPageState extends State<SignupPage>
     }
     setState(() => _isLoading = true);
     try {
+      await OfflineServices.current?.session.beginAuthAttempt();
       final credential = await _auth.signInWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text,
@@ -591,44 +592,38 @@ class _SignupPageState extends State<SignupPage>
 
   @override
   Widget build(BuildContext context) {
+    final keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
+
     return Scaffold(
       backgroundColor: Colors.white,
-      body: Stack(
-        children: [
-          AnimatedBuilder(
-            animation: _rippleController,
-            builder: (context, _) => WaterRippleBackground(
-              animation: _rippleController.value,
-              tealLight: const Color(0xFF5EEAD4),
-              teal: _teal,
-              deepsea: const Color(0xFF001F3F),
-            ),
-          ),
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  _teal.withValues(alpha: 0.05),
-                  _seaBlue.withValues(alpha: 0.03),
-                ],
-              ),
-            ),
-          ),
-          SafeArea(
-            child: SingleChildScrollView(
+      resizeToAvoidBottomInset: true,
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final minHeight = (constraints.maxHeight - 32)
+                .clamp(0.0, double.infinity)
+                .toDouble();
+
+            return SingleChildScrollView(
               keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 420),
-                  child: _buildAuthCard(),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: minHeight),
+                child: AnimatedAlign(
+                  alignment: keyboardVisible
+                      ? Alignment.topCenter
+                      : Alignment.center,
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOutCubic,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: _buildAuthCard(),
+                  ),
                 ),
               ),
-            ),
-          ),
-        ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -1093,45 +1088,61 @@ class GlassmorphicCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(28),
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 30),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Colors.white.withValues(alpha: 0.85),
-                Colors.white.withValues(alpha: 0.75),
-              ],
-            ),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.6),
-              width: 1.5,
-            ),
-            borderRadius: BorderRadius.circular(28),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF0D9488).withValues(alpha: 0.15),
-                blurRadius: 30,
-                offset: const Offset(0, 10),
-                spreadRadius: 2,
+    return CustomPaint(
+      painter: const _AuthCardShadowPainter(),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(28),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 30),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Colors.white.withValues(alpha: 0.85),
+                  Colors.white.withValues(alpha: 0.75),
+                ],
               ),
-              BoxShadow(
-                color: const Color(0xFF001F3F).withValues(alpha: 0.05),
-                blurRadius: 60,
-                offset: const Offset(0, 30),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.6),
+                width: 1.5,
               ),
-            ],
+              borderRadius: BorderRadius.circular(28),
+            ),
+            child: child,
           ),
-          child: child,
         ),
       ),
     );
   }
+}
+
+class _AuthCardShadowPainter extends CustomPainter {
+  const _AuthCardShadowPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final shadowRect = (Offset.zero & size)
+        .shift(const Offset(0, 8))
+        .inflate(2);
+    final paint = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color(0x400D9488), Color(0x300369A1)],
+      ).createShader(shadowRect)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 16);
+
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(shadowRect, const Radius.circular(28)),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _AuthCardShadowPainter oldDelegate) => false;
 }
 
 class WaterRippleBackground extends StatelessWidget {

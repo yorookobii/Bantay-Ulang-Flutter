@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'offline/offline_widgets.dart';
 
 class YieldEstimationPage extends StatefulWidget {
   final void Function(
@@ -31,6 +32,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
   StreamSubscription<QuerySnapshot>? _growthSub;
 
   bool _isLoading = true;
+  final _cacheStatus = CacheStatus('growth_indicators');
   bool _isRecalculating = false;
 
   // Firestore-backed fields
@@ -119,10 +121,17 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
         .collection('growth_indicators')
         .orderBy('timestamp', descending: true)
         .limit(1)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .listen(
-          (snapshot) {
-            if (!mounted) return;
+          (snapshot) async {
+            await _cacheStatus.loaded;
+            if (!mounted || !_cacheStatus.isCurrent) return;
+            if (!_cacheStatus.canUse(snapshot.metadata)) {
+              _cacheStatus.observe(snapshot.metadata, hasData: false);
+              setState(() => _isLoading = false);
+              return;
+            }
+            _cacheStatus.observe(snapshot.metadata, hasData: snapshot.docs.isNotEmpty);
             if (snapshot.docs.isEmpty) {
               setState(() => _isLoading = false);
               return;
@@ -176,8 +185,9 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
             );
           },
           onError: (error) {
+            _cacheStatus.reportError(error);
             debugPrint('Growth indicators subscription error: $error');
-            if (!mounted) return;
+            if (!mounted || !_cacheStatus.isCurrent) return;
             setState(() {
               _isLoading = false;
               _errorMessage = 'Unable to load yield data. Please try again.';
@@ -188,6 +198,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
 
   @override
   void dispose() {
+    _cacheStatus.dispose();
     _growthSub?.cancel();
     _fadeController.dispose();
     super.dispose();
@@ -196,7 +207,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
   Future<void> _recalculateYield() async {
     setState(() => _isRecalculating = true);
     await Future.delayed(const Duration(milliseconds: 300));
-    if (!mounted) return;
+    if (!mounted || !_cacheStatus.isCurrent) return;
     setState(() => _isRecalculating = false);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -206,7 +217,7 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                "Data is automatically updated in real time.",
+                _cacheStatus.fromCache ? 'Showing saved yield data. Connect to receive updated predictions.' : 'Yield reflects the latest prediction received from the server.',
                 style: GoogleFonts.poppins(),
               ),
             ),

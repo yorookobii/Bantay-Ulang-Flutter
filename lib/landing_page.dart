@@ -9,6 +9,10 @@ import 'yield.dart';
 import 'logs.dart';
 import 'profile.dart';
 import 'notification_service.dart';
+import 'offline/offline_services.dart';
+import 'offline/offline_widgets.dart';
+import 'offline/session_controller.dart';
+import 'phone_back_logout.dart';
 
 class DashboardPage extends StatefulWidget {
   final int initialIndex;
@@ -30,13 +34,20 @@ class _DashboardPageState extends State<DashboardPage>
 
   late int _currentNavIndex;
   final List<int> _navHistory = [];
+  PhoneBackLogoutCoordinator? _phoneBackCoordinator;
+  VoidCallback? _removeBackOverlayHandler;
   bool _showNotificationDropdown = false;
   final ValueNotifier<bool> _isNavBarVisible = ValueNotifier(true);
   Offset? _pointerDownPosition;
   DateTime? _pointerDownTime;
   late AnimationController _fadeController;
 
-  // Live data from sensor_readings
+  final _cacheStatus = CacheStatus('dashboard');
+  final _alertsCache = CacheStatus('alerts');
+  final _summaryCache = CacheStatus('growth_indicators');
+  final _tasksCache = CacheStatus('tasks');
+
+  // Live data from Aquaponics/Ulang
   double? _waterTemp;
   double? _phLevel;
   double? _dissolvedOxygen;
@@ -59,26 +70,7 @@ class _DashboardPageState extends State<DashboardPage>
   List<Map<String, dynamic>> _pendingTasks = [];
   Set<String> _seenNotificationKeys = <String>{};
 
-  // Default alerts matching the prototype in Image 2
-  final List<Map<String, dynamic>> _defaultAlerts = [
-    {
-      'id': 'alert-ph',
-      'title': 'Babala',
-      'priority': 'URGENT',
-      'message':
-          'pH Level is above the safe range. Current: 6.98. Safe range: 6.5 – 6.8. Add acid buffer or increase water change frequency.',
-    },
-    {
-      'id': 'alert-do',
-      'title': 'Babala',
-      'priority': 'URGENT',
-      'message':
-          'Dissolved Oxygen is below the safe range. Current: 6.73 mg/L. Safe range: > 8 mg/L. Increase aeration immediately. Inspect air pump and diffusers.',
-    },
-  ];
-
-  List<Map<String, dynamic>> get _displayAlerts =>
-      _activeAlerts.isNotEmpty ? _activeAlerts : _defaultAlerts;
+  List<Map<String, dynamic>> get _displayAlerts => _activeAlerts;
 
   // Profile
   String _initials = 'JS';
@@ -112,7 +104,7 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   void _navigateToTasksTab() {
-    if (!mounted) return;
+    if (!mounted || !_cacheStatus.isCurrent) return;
     _closeNotificationDropdown();
     final nav = Navigator.maybeOf(context);
     if (nav != null && nav.canPop()) {
@@ -123,6 +115,24 @@ class _DashboardPageState extends State<DashboardPage>
     _onNavTapped(1);
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final coordinator = PhoneBackLogoutScope.maybeOf(context);
+    if (identical(coordinator, _phoneBackCoordinator)) return;
+    _removeBackOverlayHandler?.call();
+    _phoneBackCoordinator = coordinator;
+    _removeBackOverlayHandler = coordinator?.registerOverlayDismissal(() {
+      if (!mounted ||
+          ModalRoute.of(context)?.isCurrent != true ||
+          !_showNotificationDropdown) {
+        return false;
+      }
+      _closeNotificationDropdown();
+      return true;
+    });
+  }
+
   void _subscribeSensorReadings() {
     // Reads the live Aquaponics/Ulang doc (ESP32-updated), nested
     // statistics.*.average paths — mirrors the web's normalizeAquaponicsReading
@@ -130,10 +140,16 @@ class _DashboardPageState extends State<DashboardPage>
     _sensorSub = FirebaseFirestore.instance
         .collection('Aquaponics')
         .doc('Ulang')
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .listen(
-          (snapshot) {
-            if (!mounted) return;
+          (snapshot) async {
+            await _cacheStatus.loaded;
+            if (!mounted || !_cacheStatus.isCurrent) return;
+            if (!_cacheStatus.canUse(snapshot.metadata)) {
+              _cacheStatus.observe(snapshot.metadata, hasData: false);
+              return;
+            }
+            _cacheStatus.observe(snapshot.metadata, hasData: snapshot.exists);
             final data = snapshot.data() as Map<String, dynamic>?;
             final stats = data?['statistics'] as Map<String, dynamic>?;
             setState(() {
@@ -144,8 +160,10 @@ class _DashboardPageState extends State<DashboardPage>
               _turbidity = (stats?['turbidityNTU']?['average'] as num?)?.toDouble();
             });
           },
-          onError: (error) =>
-              debugPrint('Sensor readings subscription error: $error'),
+          onError: (error) {
+            _cacheStatus.reportError(error);
+            debugPrint('Sensor readings subscription error: $error');
+          },
         );
   }
 
@@ -153,10 +171,15 @@ class _DashboardPageState extends State<DashboardPage>
     _alertsSub = FirebaseFirestore.instance
         .collection('alerts')
         .where('status', isEqualTo: 'active')
-        .snapshots()
-        .listen((snapshot) {
-          if (!mounted) return;
+        .snapshots(includeMetadataChanges: true)
+        .listen((snapshot) async {
+          await _alertsCache.loaded;
+          if (!mounted || !_cacheStatus.isCurrent) return;
+          final usable = _alertsCache.canUse(snapshot.metadata);
+          _alertsCache.observe(snapshot.metadata, hasData: usable && snapshot.docs.isNotEmpty);
+          if (!usable) return;
           for (final change in snapshot.docChanges) {
+            if (snapshot.metadata.isFromCache || snapshot.metadata.hasPendingWrites) continue;
             if (change.type == DocumentChangeType.removed) {
               _seenNotificationKeys.remove('alert:${change.doc.id}');
               unawaited(
@@ -186,7 +209,10 @@ class _DashboardPageState extends State<DashboardPage>
               return {'id': doc.id, ...doc.data() as Map<String, dynamic>};
             }).toList();
           });
-        }, onError: (error) => debugPrint('Alerts subscription error: $error'));
+        }, onError: (error) {
+            _cacheStatus.reportError(error);
+            debugPrint('Alerts subscription error: $error');
+          });
   }
 
   void _subscribeTasks() {
@@ -197,9 +223,10 @@ class _DashboardPageState extends State<DashboardPage>
         .collection('tasks')
         .where('assignedTo', isEqualTo: uid)
         .orderBy('createdAt', descending: true)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .listen((snapshot) {
-          if (!mounted) return;
+          if (!mounted || !_cacheStatus.isCurrent) return;
+          _tasksCache.observe(snapshot.metadata, hasData: snapshot.docs.isNotEmpty);
           setState(() {
             _pendingTasks = snapshot.docs
                 .map(
@@ -211,7 +238,10 @@ class _DashboardPageState extends State<DashboardPage>
                 .where((task) => task['status'] == 'pending')
                 .toList();
           });
-        }, onError: (error) => debugPrint('Tasks subscription error: $error'));
+        }, onError: (error) {
+            _cacheStatus.reportError(error);
+            debugPrint('Tasks subscription error: $error');
+          });
   }
 
   void _subscribeGrowthIndicators() {
@@ -219,10 +249,14 @@ class _DashboardPageState extends State<DashboardPage>
         .collection('growth_indicators')
         .orderBy('timestamp', descending: true)
         .limit(1)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .listen(
-          (snapshot) {
-            if (!mounted) return;
+          (snapshot) async {
+            await _summaryCache.loaded;
+            if (!mounted || !_cacheStatus.isCurrent) return;
+            final usable = _summaryCache.canUse(snapshot.metadata);
+            _summaryCache.observe(snapshot.metadata, hasData: usable && snapshot.docs.isNotEmpty);
+            if (!usable) return;
             if (snapshot.docs.isEmpty) return;
             final data = snapshot.docs.first.data() as Map<String, dynamic>;
             final rfYield = (data['rfProjectedYield'] as num?)?.toDouble() ??
@@ -237,12 +271,18 @@ class _DashboardPageState extends State<DashboardPage>
               _plantHealth = pHealth;
             });
           },
-          onError: (error) =>
-              debugPrint('Growth indicators subscription error: $error'),
+          onError: (error) {
+            _cacheStatus.reportError(error);
+            debugPrint('Growth indicators subscription error: $error');
+          },
         );
   }
 
   Future<void> _refreshDashboardData() async {
+    if (OfflineServices.current?.session.online == false) {
+      _showDashboardRefreshMessage('Showing saved data. Connect to refresh.');
+      return;
+    }
     final uid = FirebaseAuth.instance.currentUser?.uid;
     const serverOptions = GetOptions(source: Source.server);
 
@@ -273,11 +313,12 @@ class _DashboardPageState extends State<DashboardPage>
         alertsFuture,
         growthFuture,
         tasksFuture,
-      ]);
-      if (!mounted) return;
+      ]).timeout(const Duration(seconds: 10));
+      if (!mounted || !_cacheStatus.isCurrent) return;
 
       final sensorSnapshot =
           snapshots[0] as DocumentSnapshot<Map<String, dynamic>>;
+      _cacheStatus.observe(sensorSnapshot.metadata, hasData: sensorSnapshot.exists);
       final alertsSnapshot =
           snapshots[1] as QuerySnapshot<Map<String, dynamic>>;
       final growthSnapshot =
@@ -285,6 +326,9 @@ class _DashboardPageState extends State<DashboardPage>
       final tasksSnapshot =
           snapshots[3] as QuerySnapshot<Map<String, dynamic>>?;
 
+      _alertsCache.observe(alertsSnapshot.metadata, hasData: alertsSnapshot.docs.isNotEmpty);
+      _summaryCache.observe(growthSnapshot.metadata, hasData: growthSnapshot.docs.isNotEmpty);
+      if (tasksSnapshot != null) _tasksCache.observe(tasksSnapshot.metadata, hasData: tasksSnapshot.docs.isNotEmpty);
       final sensorData = sensorSnapshot.data();
       final stats = sensorData?['statistics'] as Map<String, dynamic>?;
       final refreshedWaterTemp =
@@ -339,15 +383,19 @@ class _DashboardPageState extends State<DashboardPage>
       });
 
       await Future.wait([_loadUserInitials(), _loadPhThresholds()]);
+      if (!mounted || !_cacheStatus.isCurrent) return;
       _showDashboardRefreshMessage(
         readingsChanged
             ? 'Dashboard refreshed with new sensor data.'
             : 'The data is up to date.',
       );
     } catch (error) {
+      _cacheStatus.reportError(error);
       debugPrint('Dashboard refresh error: $error');
       _showDashboardRefreshMessage(
-        'Unable to refresh the dashboard. Please try again.',
+        isNetworkFailure(error)
+            ? 'Showing saved data. Connect to refresh.'
+            : 'Unable to refresh the dashboard. Please try again.',
         isError: true,
       );
     }
@@ -357,7 +405,7 @@ class _DashboardPageState extends State<DashboardPage>
     String message, {
     bool isError = false,
   }) {
-    if (!mounted) return;
+    if (!mounted || !_cacheStatus.isCurrent) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
@@ -394,8 +442,8 @@ class _DashboardPageState extends State<DashboardPage>
       final doc = await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
-          .get();
-      if (!mounted) return;
+          .get(GetOptions(source: OfflineServices.current?.session.online == false ? Source.cache : Source.serverAndCache));
+      if (!mounted || !_cacheStatus.isCurrent) return;
       final fullName = (doc.data()?['fullName'] as String?) ?? '';
       if (fullName.isEmpty) return;
       final parts = fullName.trim().split(' ');
@@ -404,6 +452,7 @@ class _DashboardPageState extends State<DashboardPage>
           : '${parts[0][0]}${parts[parts.length - 1][0]}'.toUpperCase();
       setState(() => _initials = initials);
     } catch (e) {
+      _cacheStatus.reportError(e);
       debugPrint('Failed to load user initials: $e');
     }
   }
@@ -417,7 +466,7 @@ class _DashboardPageState extends State<DashboardPage>
       final userDoc = await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
-          .get();
+          .get(GetOptions(source: OfflineServices.current?.session.online == false ? Source.cache : Source.serverAndCache));
       final farmId = userDoc.data()?['farmId'] as String?;
       
       if (farmId == null) {
@@ -431,9 +480,9 @@ class _DashboardPageState extends State<DashboardPage>
           .doc(farmId)
           .collection('settings')
           .doc('waterParameters')
-          .get();
+          .get(GetOptions(source: OfflineServices.current?.session.online == false ? Source.cache : Source.serverAndCache));
 
-      if (!mounted) return;
+      if (!mounted || !_cacheStatus.isCurrent) return;
 
       if (settingsDoc.exists) {
         final data = settingsDoc.data() as Map<String, dynamic>;
@@ -443,15 +492,21 @@ class _DashboardPageState extends State<DashboardPage>
         });
       }
     } catch (e) {
+      _cacheStatus.reportError(e);
       debugPrint('Failed to load pH thresholds: $e');
     }
   }
 
   @override
   void dispose() {
+    _removeBackOverlayHandler?.call();
     if (NotificationService.instance.onNavigateToTasks == _navigateToTasksTab) {
       NotificationService.instance.onNavigateToTasks = null;
     }
+    _cacheStatus.dispose();
+    _alertsCache.dispose();
+    _summaryCache.dispose();
+    _tasksCache.dispose();
     _fadeController.dispose();
     _sensorSub?.cancel();
     _alertsSub?.cancel();
@@ -545,6 +600,7 @@ class _DashboardPageState extends State<DashboardPage>
   bool get _hasUnreadNotifications => _notificationCount > 0;
 
   void _toggleNotificationDropdown() {
+    _phoneBackCoordinator?.reset();
     setState(() {
       _showNotificationDropdown = !_showNotificationDropdown;
     });
@@ -708,6 +764,7 @@ class _DashboardPageState extends State<DashboardPage>
   // ── BUILD ──────────────────────────────────────────────────────────────
 
   void _onNavTapped(int index) {
+    _phoneBackCoordinator?.reset();
     if (index == _currentNavIndex) return;
     setState(() {
       _navHistory.add(_currentNavIndex);
@@ -799,7 +856,7 @@ class _DashboardPageState extends State<DashboardPage>
                     const TasksPage(),
                     YieldEstimationPage(
                       onGrowthData: (expectedYield, shrimpHealth, plantHealth) {
-                        if (!mounted) return;
+                        if (!mounted || !_cacheStatus.isCurrent) return;
                         setState(() {
                           _expectedYield = expectedYield;
                           _shrimpHealth = shrimpHealth;
@@ -1360,6 +1417,7 @@ class _DashboardPageState extends State<DashboardPage>
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () {
+          _phoneBackCoordinator?.reset();
           setState(() {
             _currentNavIndex = 2; // Switch to Ani tab
           });
@@ -1496,6 +1554,7 @@ class _DashboardPageState extends State<DashboardPage>
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () {
+          _phoneBackCoordinator?.reset();
           setState(() {
             _currentNavIndex = 2; // Switch to Ani tab
           });
@@ -1724,6 +1783,7 @@ class _DashboardPageState extends State<DashboardPage>
                 const SizedBox(height: 10),
                 GestureDetector(
                   onTap: () {
+                    _phoneBackCoordinator?.reset();
                     setState(() {
                       _currentNavIndex = 1;
                     });

@@ -4,10 +4,15 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'notification_service.dart';
+import 'offline/offline_services.dart';
+import 'offline/offline_widgets.dart';
+import 'offline/offline_models.dart';
+import 'offline/session_controller.dart';
 // logs import removed — task cards no longer navigate to LogsPage;
 
 class TasksPage extends StatefulWidget {
-  const TasksPage({super.key});
+  const TasksPage({super.key, this.firestore});
+  final FirebaseFirestore? firestore;
 
   @override
   State<TasksPage> createState() => _TasksPageState();
@@ -30,6 +35,7 @@ class _TasksPageState extends State<TasksPage>
   final Set<String> _notifiedTaskIds = <String>{};
   final Set<String> _completingTaskIds = <String>{};
   bool _isLoading = true;
+  final _cacheStatus = CacheStatus('tasks');
   String? _errorMessage;
 
   @override
@@ -43,16 +49,18 @@ class _TasksPageState extends State<TasksPage>
   }
 
   void _subscribeTasks() {
-    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    _tasksSub = FirebaseFirestore.instance
+    final uid = OfflineServices.current?.session.uid ?? FirebaseAuth.instance.currentUser?.uid ?? '';
+    _tasksSub = (widget.firestore ?? FirebaseFirestore.instance)
         .collection('tasks')
         .where('assignedTo', isEqualTo: uid)
         .orderBy('createdAt', descending: true)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .listen(
           (snapshot) {
-            if (!mounted) return;
+            if (!mounted || !_cacheStatus.isCurrent) return;
+            _cacheStatus.observe(snapshot.metadata, hasData: snapshot.docs.isNotEmpty);
             for (final change in snapshot.docChanges) {
+              if (snapshot.metadata.isFromCache || snapshot.metadata.hasPendingWrites) continue;
               final data = change.doc.data() as Map<String, dynamic>;
               if ((data['status'] as String?) != 'pending') {
                 unawaited(
@@ -90,8 +98,9 @@ class _TasksPageState extends State<TasksPage>
             });
           },
           onError: (error) {
+            _cacheStatus.reportError(error);
             debugPrint('Tasks subscription error: $error');
-            if (!mounted) return;
+            if (!mounted || !_cacheStatus.isCurrent) return;
             setState(() {
               _isLoading = false;
               _errorMessage = 'Hindi ma-load ang mga gawain. Subukan muli.';
@@ -102,6 +111,7 @@ class _TasksPageState extends State<TasksPage>
 
   @override
   void dispose() {
+    _cacheStatus.dispose();
     _tasksSub?.cancel();
     _fadeController.dispose();
     super.dispose();
@@ -109,35 +119,28 @@ class _TasksPageState extends State<TasksPage>
 
   Future<void> _markAsCompleted(String docId) async {
     if (_completingTaskIds.contains(docId)) return;
-
+    final services = OfflineServices.current;
+    if (services == null || !services.session.online) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Internet connection is required.')));
+      return;
+    }
+    final owner = services.session.uid;
+    final epoch = services.session.accessEpoch;
+    bool isCurrent() => mounted && _cacheStatus.isCurrent &&
+      services.session.uid == owner && services.session.accessEpoch == epoch;
     setState(() => _completingTaskIds.add(docId));
-
     try {
-      await FirebaseFirestore.instance.collection('tasks').doc(docId).update({
-        'status': 'done',
-      });
-      if (mounted) {
-        _showSuccessSnackbar('Matagumpay mong natapos ang gawain.');
-      }
-    } catch (e) {
-      debugPrint('Failed to mark task complete: $e');
-      if (mounted) {
-        setState(() => _completingTaskIds.remove(docId));
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Hindi ma-update ang gawain. Subukan muli.',
-              style: GoogleFonts.poppins(),
-            ),
-            backgroundColor: const Color(0xFFDC2626),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-            margin: const EdgeInsets.all(16),
-          ),
-        );
-      }
+      await services.submitOnline(OperationKind.task, {'taskId': docId}, isCurrent: isCurrent);
+      if (isCurrent()) _showSuccessSnackbar('Matagumpay na natapos ang gawain.');
+    } catch (error) {
+      if (!mounted || !isCurrent()) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+        isNetworkFailure(error) ? 'Internet connection is required.' :
+        error is SyncConflict ? error.message :
+        'Completion could not be confirmed. Check the task before trying again.')));
+    } finally {
+      if (mounted) setState(() => _completingTaskIds.remove(docId));
     }
   }
 
@@ -486,7 +489,7 @@ class _TasksPageState extends State<TasksPage>
                           color: Colors.white,
                         ),
                         label: Text(
-                          "Tapusin",
+                          isCompleting ? "Saving..." : "Tapusin",
                           style: GoogleFonts.poppins(
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
