@@ -189,13 +189,14 @@ void main() {
     );
   }
 
-  testWidgets('root Back is consumed and the second press prompts', (
+  testWidgets('root Back is silent and the second press prompts', (
     tester,
   ) async {
     await showApp(tester);
     await back(tester);
     expect(dialog, findsNothing);
-    expect(find.text('Press Back again to log out'), findsOneWidget);
+    expect(find.text('Press Back again to log out'), findsNothing);
+    expect(find.byType(SnackBar), findsNothing);
     expect(
       platformCalls.where((c) => c.method == 'SystemNavigator.pop'),
       isEmpty,

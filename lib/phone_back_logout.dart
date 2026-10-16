@@ -130,14 +130,7 @@ class PhoneBackLogoutCoordinator extends NavigatorObserver
     }
 
     _backWindow = Timer(const Duration(seconds: 2), reset);
-    if (!await _navigateBack(nav)) {
-      messengerKey.currentState?.showSnackBar(
-        const SnackBar(
-          content: Text('Press Back again to log out'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-    }
+    await _navigateBack(nav);
     return true;
   }
 

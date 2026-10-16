@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'password_validation.dart';
 import 'offline/offline_services.dart';
+import 'privacy_policy.dart';
 
 enum AuthMessageKind { success, error, warning, info }
 
@@ -794,6 +795,20 @@ class _SignupPageState extends State<SignupPage> {
                           ),
                         ),
                 ),
+              ),
+              const SizedBox(height: 12),
+              TextButton(
+                key: const Key('auth_privacy_policy'),
+                onPressed: _isLoading ? null : () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    settings: const RouteSettings(name: '/privacy'),
+                    builder: (_) => const PrivacyPolicyPage(),
+                  ),
+                ),
+                child: Text('Privacy Policy', style: GoogleFonts.poppins(
+                  color: _tealDark, fontSize: 13,
+                  decoration: TextDecoration.underline,
+                )),
               ),
             ],
           ),

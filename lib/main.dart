@@ -10,6 +10,9 @@ import 'offline/offline_services.dart';
 import 'offline/local_record_cleanup.dart';
 import 'offline/offline_widgets.dart';
 import 'phone_back_logout.dart';
+import 'signup.dart';
+import 'privacy_policy.dart';
+import 'settings.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -83,12 +86,14 @@ class _MyAppState extends State<MyApp> {
           ),
         ),
         debugShowCheckedModeBanner: false,
-        home: const SessionEntry(),
+        home: const StartupSplashPage(),
         builder: (context, child) => SessionNavigationGuard(
           child: SessionOfflineNotice(child: child!),
         ),
         routes: {
-          '/login': (context) => const LoginPage(),
+          '/privacy': (context) => const PrivacyPolicyPage(),
+          '/settings': (context) => const SettingsPage(),
+          '/login': (context) => const SignupPage(),
           '/session': (context) => const SessionEntry(),
           '/dashboard': (context) => const SessionEntry(),
           '/admin': (context) => const SessionEntry(),

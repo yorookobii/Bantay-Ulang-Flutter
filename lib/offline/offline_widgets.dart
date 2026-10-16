@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../landing_page.dart';
-import '../login.dart';
+import '../signup.dart';
 import '../notification_service.dart';
 import 'offline_services.dart';
 import 'session_controller.dart';
@@ -19,7 +19,7 @@ class _SessionEntryState extends State<SessionEntry> {
   @override
   Widget build(BuildContext context) {
     final service = OfflineServices.current;
-    if (service == null) return const LoginPage();
+    if (service == null) return const SignupPage();
     return AnimatedBuilder(
       animation: service.session,
       builder: (context, _) {
@@ -43,7 +43,7 @@ class _SessionEntryState extends State<SessionEntry> {
           );
         }
         _openedDashboard = false;
-        if (session.message == null) return const LoginPage();
+        if (session.message == null) return const SignupPage();
         return Scaffold(
           body: SafeArea(
             child: Center(

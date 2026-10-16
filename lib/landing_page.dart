@@ -13,6 +13,8 @@ import 'offline/offline_services.dart';
 import 'offline/offline_widgets.dart';
 import 'offline/session_controller.dart';
 import 'phone_back_logout.dart';
+import 'water_parameter_status.dart';
+import 'water_parameter_badge.dart';
 
 class DashboardPage extends StatefulWidget {
   final int initialIndex;
@@ -46,19 +48,22 @@ class _DashboardPageState extends State<DashboardPage>
   final _alertsCache = CacheStatus('alerts');
   final _summaryCache = CacheStatus('growth_indicators');
   final _tasksCache = CacheStatus('tasks');
+  final _thresholdsCache = CacheStatus('water_parameter_thresholds');
 
   // Live data from Aquaponics/Ulang
   double? _waterTemp;
   double? _phLevel;
   double? _dissolvedOxygen;
   double? _salinity;
+  double? _tds;
   double? _turbidity;
   double? _waterLevel;
   double? get waterLevel => _waterLevel;
 
-  // pH threshold configuration (user-defined per farm)
-  double _phMin = 6.8;
-  double _phMax = 8.0;
+  // Same global Firebase configuration as the administrator's readings cards.
+  var _waterThresholds = WaterParameterThresholds.fromFirestore(null);
+  bool _thresholdsReady = false;
+  int _thresholdsRevision = 0;
 
   // Live data from growth_indicators (populated via YieldEstimationPage callback)
   double? _expectedYield;
@@ -80,6 +85,7 @@ class _DashboardPageState extends State<DashboardPage>
   StreamSubscription<QuerySnapshot>? _alertsSub;
   StreamSubscription<QuerySnapshot>? _tasksSub;
   StreamSubscription<QuerySnapshot>? _growthSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _thresholdsSub;
 
   @override
   void initState() {
@@ -100,7 +106,7 @@ class _DashboardPageState extends State<DashboardPage>
     _subscribeTasks();
     _subscribeGrowthIndicators();
     _loadUserInitials();
-    _loadPhThresholds();
+    _subscribeWaterParameterThresholds();
   }
 
   void _navigateToTasksTab() {
@@ -157,6 +163,7 @@ class _DashboardPageState extends State<DashboardPage>
               _phLevel = (stats?['phValue']?['average'] as num?)?.toDouble();
               _dissolvedOxygen = (stats?['oxygenLevelMgL']?['average'] as num?)?.toDouble();
               _salinity = (stats?['salinityPpt']?['average'] as num?)?.toDouble();
+              _tds = (stats?['tdsPpm']?['average'] as num?)?.toDouble();
               _turbidity = (stats?['turbidityNTU']?['average'] as num?)?.toDouble();
             });
           },
@@ -339,12 +346,15 @@ class _DashboardPageState extends State<DashboardPage>
           (stats?['oxygenLevelMgL']?['average'] as num?)?.toDouble();
       final refreshedSalinity =
           (stats?['salinityPpt']?['average'] as num?)?.toDouble();
+      final refreshedTds =
+          (stats?['tdsPpm']?['average'] as num?)?.toDouble();
       final refreshedTurbidity =
           (stats?['turbidityNTU']?['average'] as num?)?.toDouble();
       final readingsChanged = refreshedWaterTemp != _waterTemp ||
           refreshedPh != _phLevel ||
           refreshedDissolvedOxygen != _dissolvedOxygen ||
           refreshedSalinity != _salinity ||
+          refreshedTds != _tds ||
           refreshedTurbidity != _turbidity;
       final activeAlerts = alertsSnapshot.docs.map((doc) {
         return <String, dynamic>{'id': doc.id, ...doc.data()};
@@ -365,6 +375,7 @@ class _DashboardPageState extends State<DashboardPage>
         _phLevel = refreshedPh;
         _dissolvedOxygen = refreshedDissolvedOxygen;
         _salinity = refreshedSalinity;
+        _tds = refreshedTds;
         _turbidity = refreshedTurbidity;
         _activeAlerts = activeAlerts;
         _pendingTasks = pendingTasks;
@@ -382,7 +393,7 @@ class _DashboardPageState extends State<DashboardPage>
         }
       });
 
-      await Future.wait([_loadUserInitials(), _loadPhThresholds()]);
+      await Future.wait([_loadUserInitials(), _loadWaterParameterThresholds()]);
       if (!mounted || !_cacheStatus.isCurrent) return;
       _showDashboardRefreshMessage(
         readingsChanged
@@ -457,43 +468,56 @@ class _DashboardPageState extends State<DashboardPage>
     }
   }
 
-  Future<void> _loadPhThresholds() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+  void _subscribeWaterParameterThresholds() {
+    _thresholdsSub = FirebaseFirestore.instance
+        .collection('settings')
+        .doc('thresholds')
+        .snapshots(includeMetadataChanges: true)
+        .listen((snapshot) async {
+          await _thresholdsCache.loaded;
+          if (!mounted || !_thresholdsCache.isCurrent) return;
+          if (!_thresholdsCache.canUse(snapshot.metadata)) return;
+          _applyWaterParameterThresholds(snapshot);
+        }, onError: _reportThresholdsError);
+  }
+
+  void _applyWaterParameterThresholds(
+    DocumentSnapshot<Map<String, dynamic>> snapshot,
+  ) {
+    if (!mounted || !_thresholdsCache.isCurrent) return;
+    _thresholdsCache.observe(snapshot.metadata, hasData: snapshot.exists);
+    setState(() {
+      _thresholdsRevision++;
+      _waterThresholds = WaterParameterThresholds.fromFirestore(snapshot.data());
+      _thresholdsReady = true;
+    });
+  }
+
+  Future<void> _loadWaterParameterThresholds() async {
+    final revision = _thresholdsRevision;
     try {
-      // Try to load from user's farm settings
-      // First, get the user's farm reference
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get(GetOptions(source: OfflineServices.current?.session.online == false ? Source.cache : Source.serverAndCache));
-      final farmId = userDoc.data()?['farmId'] as String?;
-      
-      if (farmId == null) {
-        debugPrint('No farm ID found for user');
-        return;
-      }
-
-      // Load water parameters settings for the farm
-      final settingsDoc = await FirebaseFirestore.instance
-          .collection('farms')
-          .doc(farmId)
+      final snapshot = await FirebaseFirestore.instance
           .collection('settings')
-          .doc('waterParameters')
-          .get(GetOptions(source: OfflineServices.current?.session.online == false ? Source.cache : Source.serverAndCache));
+          .doc('thresholds')
+          .get(GetOptions(source: OfflineServices.current?.session.online == false
+              ? Source.cache : Source.server));
+      await _thresholdsCache.loaded;
+      if (revision != _thresholdsRevision) return;
+      if (!_thresholdsCache.canUse(snapshot.metadata)) return;
+      _applyWaterParameterThresholds(snapshot);
+    } catch (error) {
+      _reportThresholdsError(error);
+    }
+  }
 
-      if (!mounted || !_cacheStatus.isCurrent) return;
-
-      if (settingsDoc.exists) {
-        final data = settingsDoc.data() as Map<String, dynamic>;
-        setState(() {
-          _phMin = (data['phMin'] as num?)?.toDouble() ?? 6.8;
-          _phMax = (data['phMax'] as num?)?.toDouble() ?? 8.0;
-        });
-      }
-    } catch (e) {
-      _cacheStatus.reportError(e);
-      debugPrint('Failed to load pH thresholds: $e');
+  void _reportThresholdsError(Object error) {
+    if (!mounted || !_thresholdsCache.isCurrent) return;
+    _thresholdsCache.reportError(error);
+    debugPrint('Water parameter thresholds error: $error');
+    // Match the admin's default fallback only before any usable configuration.
+    // A later connectivity failure retains the last confirmed thresholds.
+    if (!_thresholdsReady && _thresholdsCache.isCurrent) {
+      setState(() => _thresholdsReady = true);
     }
   }
 
@@ -507,93 +531,23 @@ class _DashboardPageState extends State<DashboardPage>
     _alertsCache.dispose();
     _summaryCache.dispose();
     _tasksCache.dispose();
+    _thresholdsCache.dispose();
     _fadeController.dispose();
     _sensorSub?.cancel();
     _alertsSub?.cancel();
     _tasksSub?.cancel();
     _growthSub?.cancel();
+    _thresholdsSub?.cancel();
     _isNavBarVisible.dispose();
     super.dispose();
   }
 
   // ── Derived status from sensor values ─────────────────────────────────
 
-  String get _tempStatus {
-    if (_waterTemp == null) return 'WALANG DATA';
-    if (_waterTemp! < 24) return 'MABABA';
-    if (_waterTemp! > 30) return 'MATAAS';
-    return 'KATAMTAMAN';
-  }
-
-  Color get _tempColor {
-    if (_waterTemp == null) return textMuted;
-    if (_waterTemp! < 24 || _waterTemp! > 30) return warningRed;
-    return teal;
-  }
-
-  String get _oxygenStatus {
-    if (_dissolvedOxygen == null) return 'WALANG DATA';
-    if (_dissolvedOxygen! < 5.0) return 'MABABA';
-    return 'SAPAT';
-  }
-
-  String get _oxygenDescription {
-    if (_dissolvedOxygen == null) return 'Walang datos mula sa sensor.';
-    if (_dissolvedOxygen! < 5.0) {
-      return 'Mababa ang dissolved oxygen. Suriin ang sistema ng aeration.';
-    }
-    return 'May sapat na hangin para sa mga ulang.';
-  }
-
-  Color get _oxygenColor {
-    if (_dissolvedOxygen == null) return textMuted;
-    if (_dissolvedOxygen! < 5.0) return warningRed;
-    return teal;
-  }
-
-  String get _turbidityStatus {
-    if (_turbidity == null) return 'WALANG DATA';
-    if (_turbidity! > 100) return 'MALABO';
-    if (_turbidity! > 50) return 'KATAMTAMAN';
-    return 'MALINAW';
-  }
-
-  String get _turbidityDescription {
-    if (_turbidity == null) return 'Walang datos mula sa sensor.';
-    if (_turbidity! > 100) return 'Malabo ang tubig. Kailangang linisin.';
-    if (_turbidity! > 50)
-      return 'Katamtamang kalinisan ng tubig. Bantayan pa rin.';
-    return 'Malinis ang tubig. Walang nakitang lason o dumi.';
-  }
-
-  Color get _turbidityColor {
-    if (_turbidity == null) return textMuted;
-    if (_turbidity! > 100) return warningRed;
-    if (_turbidity! > 50) return const Color(0xFFF59E0B);
-    return teal;
-  }
-
-  String get _phStatus {
-    if (_phLevel == null) return 'WALANG DATA';
-    if (_phLevel! < _phMin || _phLevel! > _phMax) return 'BABALA';
-    return 'NORMAL';
-  }
-
-  String get _phDescription {
-    if (_phLevel == null) return 'Walang datos mula sa sensor.';
-    if (_phLevel! < _phMin) {
-      return 'Mababa ang pH level. Ang tubig ay masyadong asido para sa mga ulang.';
-    }
-    if (_phLevel! > _phMax) {
-      return 'Mataas ang pH level. Ang tubig ay masyadong alkaline para sa mga ulang.';
-    }
-    return 'Tamang-tama ang pH level para sa kalusugan ng mga ulang at tanim.';
-  }
-
-  Color get _phColor {
-    if (_phLevel == null) return textMuted;
-    if (_phLevel! < _phMin || _phLevel! > _phMax) return warningRed;
-    return teal;
+  WaterParameterStatus? _waterStatus(WaterParameter parameter, double? value) {
+    if (value == null || !value.isFinite) return WaterParameterStatus.noData;
+    if (!_thresholdsReady) return null;
+    return _waterThresholds.classify(parameter, value);
   }
 
   int get _notificationCount => _pendingTasks.length;
@@ -674,92 +628,14 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
 
-  String? _extractMeasurementFromAlerts(List<String> keywords) {
-    for (final alert in _displayAlerts) {
-      final msg = ((alert['message'] as String?) ?? '');
-      final title = ((alert['title'] as String?) ?? '');
-      final fullText = '$title $msg'.toLowerCase();
+  String get _salinityDisplay => _salinity != null && _salinity!.isFinite
+      ? '${_salinity!.toStringAsFixed(2)} ppt' : '--';
 
-      final matchesAny =
-          keywords.any((k) => fullText.contains(k.toLowerCase()));
-      if (matchesAny) {
-        final currentMatch = RegExp(
-          r'current:\s*([0-9]+(?:\.[0-9]+)?(?:\s*[a-zA-Z/%°]+)?)',
-          caseSensitive: false,
-        ).firstMatch(msg);
-        if (currentMatch != null) {
-          final val = currentMatch.group(1)?.trim();
-          if (val != null && val.isNotEmpty) return val;
-        }
+  String get _tdsDisplay => _tds != null && _tds!.isFinite
+      ? '${(_tds! + 0.5).floor()} ppm' : '--';
 
-        final unitMatch = RegExp(
-          r'([0-9]+(?:\.[0-9]+)?\s*(?:ppt|ppm|NTU|mg/L|°C|g/L|PSU))',
-          caseSensitive: false,
-        ).firstMatch(msg);
-        if (unitMatch != null) {
-          final val = unitMatch.group(1)?.trim();
-          if (val != null && val.isNotEmpty) return val;
-        }
-      }
-    }
-    return null;
-  }
-
-  bool _hasAlertFor(List<String> keywords) {
-    for (final alert in _displayAlerts) {
-      final msg = ((alert['message'] as String?) ?? '').toLowerCase();
-      final title = ((alert['title'] as String?) ?? '').toLowerCase();
-      if (keywords.any(
-        (k) => msg.contains(k.toLowerCase()) || title.contains(k.toLowerCase()),
-      )) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  String get _salinityDisplay {
-    final fromAlert =
-        _extractMeasurementFromAlerts(['salinity', 'tds', 'alat', 'asin']);
-    if (fromAlert != null) return fromAlert;
-    if (_salinity != null) return '${_salinity!.toStringAsFixed(1)} ppt';
-    return '--';
-  }
-
-  String get _salinityStatusText {
-    if (_hasAlertFor(['salinity', 'tds', 'alat', 'asin'])) return 'BABALA';
-    if (_salinity == null) return 'WALANG DATA';
-    if (_salinity! > 15.0) return 'MATAAS';
-    if (_salinity! < 0.5) return 'MABABA';
-    return 'NORMAL';
-  }
-
-  Color get _salinityStatusColor {
-    if (_hasAlertFor(['salinity', 'tds', 'alat', 'asin'])) return warningRed;
-    if (_salinity == null) return textMuted;
-    if (_salinity! > 15.0 || _salinity! < 0.5) return warningRed;
-    return teal;
-  }
-
-  String get _turbidityDisplay {
-    final fromAlert =
-        _extractMeasurementFromAlerts(['turbidity', 'labo', 'linis', 'ntu']);
-    if (fromAlert != null) return fromAlert;
-    if (_turbidity != null) return '${_turbidity!.toStringAsFixed(0)} NTU';
-    return '--';
-  }
-
-  String get _turbidityBadgeText {
-    if (_hasAlertFor(['turbidity', 'labo', 'linis', 'ntu'])) return 'BABALA';
-    if (_turbidity == null) return 'WALANG DATA';
-    return _turbidityStatus == 'WALANG DATA' ? 'MALINAW' : _turbidityStatus;
-  }
-
-  Color get _turbidityBadgeColor {
-    if (_hasAlertFor(['turbidity', 'labo', 'linis', 'ntu'])) return warningRed;
-    if (_turbidity == null) return textMuted;
-    return _turbidityColor == textMuted ? teal : _turbidityColor;
-  }
+  String get _turbidityDisplay => _turbidity != null && _turbidity!.isFinite
+      ? '${_turbidity!.toStringAsFixed(0)} NTU' : '--';
 
   // ── BUILD ──────────────────────────────────────────────────────────────
 
@@ -967,7 +843,13 @@ class _DashboardPageState extends State<DashboardPage>
                     shape: BoxShape.circle,
                     border: Border.all(color: teal, width: 1.5),
                   ),
-                  child: Icon(Icons.water_drop, color: tealDark, size: 20),
+                  child: ClipOval(
+                    child: Image.asset(
+                      'assets/img/logo_BU.png',
+                      fit: BoxFit.contain,
+                      semanticLabel: 'Bantay Ulang logo',
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -1348,12 +1230,12 @@ class _DashboardPageState extends State<DashboardPage>
         ),
         const SizedBox(height: 10),
 
-        // Row 2: Temperatura & Salinity / TDS
+        // Row 2: Separate TDS and Salinity readings, matching the admin cards.
         IntrinsicHeight(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(child: _buildTempMiniCard()),
+              Expanded(child: _buildTdsMiniCard()),
               const SizedBox(width: 10),
               Expanded(child: _buildSalinityMiniCard()),
             ],
@@ -1361,11 +1243,16 @@ class _DashboardPageState extends State<DashboardPage>
         ),
         const SizedBox(height: 10),
 
-        // Row 3: Turbidity
-        Row(
-          children: [
-            Expanded(child: _buildTurbidityMiniCard()),
-          ],
+        // Row 3: Turbidity & Temperatura
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: _buildTurbidityMiniCard()),
+              const SizedBox(width: 10),
+              Expanded(child: _buildTempMiniCard()),
+            ],
+          ),
         ),
       ],
     );
@@ -1809,7 +1696,8 @@ class _DashboardPageState extends State<DashboardPage>
 
   // Card 2: pH Level
   Widget _buildPHMiniCard() {
-    final phVal = _phLevel != null ? _phLevel!.toStringAsFixed(1) : '--';
+    final phVal = _phLevel != null && _phLevel!.isFinite
+        ? _phLevel!.toStringAsFixed(1) : '--';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
@@ -1875,35 +1763,9 @@ class _DashboardPageState extends State<DashboardPage>
             ),
           ),
           const SizedBox(height: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-            decoration: BoxDecoration(
-              color: _phColor == warningRed
-                  ? const Color(0xFFFEE2E2)
-                  : (_phColor == textMuted
-                      ? const Color(0xFFF3F4F6)
-                      : const Color(0xFFECFDF5)),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                color: _phColor == warningRed
-                    ? const Color(0xFFEF4444).withValues(alpha: 0.35)
-                    : (_phColor == textMuted
-                        ? textMuted.withValues(alpha: 0.35)
-                        : const Color(0xFF10B981).withValues(alpha: 0.35)),
-                width: 1,
-              ),
-            ),
-            child: Text(
-              _phStatus,
-              style: GoogleFonts.poppins(
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-                color: _phColor == warningRed
-                    ? const Color(0xFFDC2626)
-                    : (_phColor == textMuted ? textMuted : const Color(0xFF059669)),
-                letterSpacing: 0.4,
-              ),
-            ),
+          WaterParameterBadge(
+            key: const ValueKey(WaterParameter.ph),
+            status: _waterStatus(WaterParameter.ph, _phLevel),
           ),
         ],
       ),
@@ -1913,7 +1775,8 @@ class _DashboardPageState extends State<DashboardPage>
   // Card 3: Dissolved Oxygen
   Widget _buildOxygenMiniCard() {
     final oxygenVal =
-        _dissolvedOxygen != null ? _dissolvedOxygen!.toStringAsFixed(1) : '--';
+        _dissolvedOxygen != null && _dissolvedOxygen!.isFinite
+            ? _dissolvedOxygen!.toStringAsFixed(1) : '--';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
@@ -1979,35 +1842,9 @@ class _DashboardPageState extends State<DashboardPage>
             ),
           ),
           const SizedBox(height: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-            decoration: BoxDecoration(
-              color: _oxygenColor == warningRed
-                  ? const Color(0xFFFEE2E2)
-                  : (_oxygenColor == textMuted
-                      ? const Color(0xFFF3F4F6)
-                      : const Color(0xFFECFDF5)),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                color: _oxygenColor == warningRed
-                    ? const Color(0xFFEF4444).withValues(alpha: 0.35)
-                    : (_oxygenColor == textMuted
-                        ? textMuted.withValues(alpha: 0.35)
-                        : const Color(0xFF10B981).withValues(alpha: 0.35)),
-                width: 1,
-              ),
-            ),
-            child: Text(
-              _oxygenStatus == 'SAPAT' ? "NORMAL" : _oxygenStatus,
-              style: GoogleFonts.poppins(
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-                color: _oxygenColor == warningRed
-                    ? const Color(0xFFDC2626)
-                    : (_oxygenColor == textMuted ? textMuted : const Color(0xFF059669)),
-                letterSpacing: 0.4,
-              ),
-            ),
+          WaterParameterBadge(
+            key: const ValueKey(WaterParameter.oxygen),
+            status: _waterStatus(WaterParameter.oxygen, _dissolvedOxygen),
           ),
         ],
       ),
@@ -2017,8 +1854,10 @@ class _DashboardPageState extends State<DashboardPage>
   // Card 4: Temperatura ng Tubig
   Widget _buildTempMiniCard() {
     final tempVal =
-        _waterTemp != null ? '${_waterTemp!.toStringAsFixed(1)}°C' : '--';
-    final isTempAlert = _tempColor == warningRed;
+        _waterTemp != null && _waterTemp!.isFinite
+            ? '${_waterTemp!.toStringAsFixed(1)}°C' : '--';
+    final isTempAlert = _waterStatus(WaterParameter.temperature, _waterTemp) ==
+        WaterParameterStatus.critical;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
@@ -2084,56 +1923,54 @@ class _DashboardPageState extends State<DashboardPage>
             ),
           ),
           const SizedBox(height: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-            decoration: BoxDecoration(
-              color: isTempAlert
-                  ? const Color(0xFFFEE2E2)
-                  : (_tempColor == textMuted
-                      ? const Color(0xFFF3F4F6)
-                      : const Color(0xFFECFDF5)),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                color: isTempAlert
-                    ? const Color(0xFFEF4444).withValues(alpha: 0.35)
-                    : (_tempColor == textMuted
-                        ? textMuted.withValues(alpha: 0.35)
-                        : const Color(0xFF10B981).withValues(alpha: 0.35)),
-                width: 1,
-              ),
-            ),
-            child: Text(
-              _tempStatus,
-              style: GoogleFonts.poppins(
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-                color: isTempAlert
-                    ? const Color(0xFFDC2626)
-                    : (_tempColor == textMuted ? textMuted : const Color(0xFF059669)),
-                letterSpacing: 0.4,
-              ),
-            ),
+          WaterParameterBadge(
+            key: const ValueKey(WaterParameter.temperature),
+            status: _waterStatus(WaterParameter.temperature, _waterTemp),
           ),
         ],
       ),
     );
   }
 
-  // Card 5: Salinity / TDS
-  Widget _buildSalinityMiniCard() {
-    final salinityVal = _salinityDisplay;
-    final isAlert = _salinityStatusColor == warningRed;
-    final isNoData = _salinityStatusColor == textMuted;
+  // The admin reads these independently from Aquaponics/Ulang statistics.
+  Widget _buildTdsMiniCard() => _buildWaterParameterMiniCard(
+    parameter: WaterParameter.tds,
+    label: 'TDS',
+    value: _tdsDisplay,
+    reading: _tds,
+    icon: Icons.grain_rounded,
+  );
 
+  Widget _buildSalinityMiniCard() => _buildWaterParameterMiniCard(
+    parameter: WaterParameter.salinity,
+    label: 'Salinity',
+    value: _salinityDisplay,
+    reading: _salinity,
+    icon: Icons.opacity_rounded,
+  );
+
+  Widget _buildTurbidityMiniCard() => _buildWaterParameterMiniCard(
+    parameter: WaterParameter.turbidity,
+    label: 'Turbidity',
+    value: _turbidityDisplay,
+    reading: _turbidity,
+    icon: Icons.blur_on_rounded,
+  );
+
+  Widget _buildWaterParameterMiniCard({
+    required WaterParameter parameter,
+    required String label,
+    required String value,
+    required double? reading,
+    required IconData icon,
+  }) {
     return Container(
+      key: ValueKey('water_card_${parameter.name}'),
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: const Color(0xFFE2E8F0),
-          width: 1.1,
-        ),
+        border: Border.all(color: const Color(0xFFE2E8F0), width: 1.1),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.03),
@@ -2155,32 +1992,25 @@ class _DashboardPageState extends State<DashboardPage>
                   color: Color(0xFFE0F2FE),
                   shape: BoxShape.circle,
                 ),
-                child: const Center(
-                  child: Icon(
-                    Icons.opacity_rounded,
-                    size: 15,
-                    color: Color(0xFF0284C7),
-                  ),
-                ),
+                child: Center(child: Icon(icon, size: 15, color: const Color(0xFF0284C7))),
               ),
               const SizedBox(width: 7),
-              Expanded(
-                child: Text(
-                  "Salinity / TDS",
-                  style: GoogleFonts.poppins(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w600,
-                    color: const Color(0xFF475569),
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+              Expanded(child: Text(
+                label,
+                style: GoogleFonts.poppins(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  color: const Color(0xFF475569),
                 ),
-              ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              )),
             ],
           ),
           const SizedBox(height: 6),
           Text(
-            salinityVal,
+            value,
+            key: ValueKey('water_value_${parameter.name}'),
             style: GoogleFonts.poppins(
               fontSize: 20,
               fontWeight: FontWeight.w800,
@@ -2189,133 +2019,9 @@ class _DashboardPageState extends State<DashboardPage>
             ),
           ),
           const SizedBox(height: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-            decoration: BoxDecoration(
-              color: isAlert
-                  ? const Color(0xFFFEE2E2)
-                  : (isNoData ? const Color(0xFFF3F4F6) : const Color(0xFFECFDF5)),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                color: isAlert
-                    ? const Color(0xFFEF4444).withValues(alpha: 0.35)
-                    : (isNoData
-                        ? textMuted.withValues(alpha: 0.35)
-                        : const Color(0xFF10B981).withValues(alpha: 0.35)),
-                width: 1,
-              ),
-            ),
-            child: Text(
-              _salinityStatusText,
-              style: GoogleFonts.poppins(
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-                color: isAlert
-                    ? const Color(0xFFDC2626)
-                    : (isNoData ? textMuted : const Color(0xFF059669)),
-                letterSpacing: 0.4,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // Card 6: Turbidity
-  Widget _buildTurbidityMiniCard() {
-    final turbidityVal = _turbidityDisplay;
-    final isAlert = _turbidityBadgeColor == warningRed;
-    final isWarning = _turbidityBadgeColor == const Color(0xFFF59E0B);
-    final isNoData = _turbidityBadgeColor == textMuted;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: const Color(0xFFE2E8F0),
-          width: 1.1,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 28,
-            height: 28,
-            decoration: const BoxDecoration(
-              color: Color(0xFFE0F2FE),
-              shape: BoxShape.circle,
-            ),
-            child: const Center(
-              child: Icon(
-                Icons.blur_on_rounded,
-                size: 15,
-                color: Color(0xFF0284C7),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            "Turbidity",
-            style: GoogleFonts.poppins(
-              fontSize: 11.5,
-              fontWeight: FontWeight.w600,
-              color: const Color(0xFF475569),
-            ),
-          ),
-          const Spacer(),
-          Text(
-            turbidityVal,
-            style: GoogleFonts.poppins(
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-              color: const Color(0xFF1E293B),
-              letterSpacing: -0.5,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-            decoration: BoxDecoration(
-              color: isAlert
-                  ? const Color(0xFFFEE2E2)
-                  : (isWarning
-                      ? const Color(0xFFFEF3C7)
-                      : (isNoData ? const Color(0xFFF3F4F6) : const Color(0xFFECFDF5))),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                color: isAlert
-                    ? const Color(0xFFEF4444).withValues(alpha: 0.35)
-                    : (isWarning
-                        ? const Color(0xFFF59E0B).withValues(alpha: 0.35)
-                        : (isNoData
-                            ? textMuted.withValues(alpha: 0.35)
-                            : const Color(0xFF10B981).withValues(alpha: 0.35))),
-                width: 1,
-              ),
-            ),
-            child: Text(
-              _turbidityBadgeText,
-              style: GoogleFonts.poppins(
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-                color: isAlert
-                    ? const Color(0xFFDC2626)
-                    : (isWarning
-                        ? const Color(0xFFD97706)
-                        : (isNoData ? textMuted : const Color(0xFF059669))),
-                letterSpacing: 0.4,
-              ),
-            ),
+          WaterParameterBadge(
+            key: ValueKey(parameter),
+            status: _waterStatus(parameter, reading),
           ),
         ],
       ),

@@ -1,0 +1,84 @@
+{
+  "appName": "Bantay Ulang",
+  "publisher": "Bantay Ulang development team",
+  "contactEmail": "quadlabs2026@gmail.com",
+  "lastUpdated": "October 12, 2026",
+  "sections": [
+    {
+      "id": "introduction",
+      "title": "Introduction",
+      "paragraphs": [
+        "Bantay Ulang helps aquaponics practitioners and administrators monitor water quality, manage freshwater prawn (Ulang) cultivation, record plant and prawn growth, and coordinate farm tasks. We aim to handle personal information carefully and limit its use to operating and supporting this service."
+      ]
+    },
+    {
+      "id": "information-collected",
+      "title": "Information Collected",
+      "paragraphs": [
+        "Account information: full name, email address, a Firebase account identifier, role, approval status, email-verification status, and account creation time. If you enter an address in Profile, that address is saved with your profile. Your password is submitted to Firebase Authentication; the app does not write it to the farm-record database or its own local preferences.",
+        "Task information: assigned account identifiers, task titles and descriptions, and task status, including completion updates. Administrators assign tasks through the connected system.",
+        "Water and farming information: pH, dissolved oxygen, salinity, total dissolved solids (TDS), turbidity, temperature, alerts, and system thresholds; prawn length, weight, mortality counts, farming weeks and cycles, and growth/yield indicators; plant name, height, growth stage, and condition. Recorded entries include dates and account identifiers, and some logs also include the recorder's name and email address."
+      ]
+    },
+    {
+      "id": "firebase-processing",
+      "title": "Firebase Data Processing",
+      "paragraphs": [
+        "Google/Firebase provides Firebase Authentication for email/password sign-in, email verification, password resets, and account identifiers. Cloud Firestore stores account profiles, tasks, farm readings, alerts, settings, growth records, and growth/yield indicators, and supplies live updates and offline caching."
+      ]
+    },
+    {
+      "id": "information-use",
+      "title": "How Information Is Used",
+      "paragraphs": [
+        "Information supports account registration, sign-in, verification, approval and access decisions; monitoring water quality and alerts; recording and displaying plant and prawn growth; growth/yield analysis; assigning and completing tasks; and presenting notifications.",
+        "Farm records also support administrator analysis and reports in the connected website. Recorder identifiers, names, emails, and timestamps associate entries with the person who submitted them. Local storage supports offline viewing, saved approved sessions, and avoiding repeated notifications."
+      ]
+    },
+    {
+      "id": "security",
+      "title": "Data Security",
+      "paragraphs": [
+        "The app checks email verification, practitioner role, and active administrator approval before normal practitioner access. It checks account access again for online submissions and checks task assignment before task completion."
+      ]
+    },
+    {
+      "id": "retention-deletion",
+      "title": "Data Retention and Deletion",
+      "paragraphs": [
+        "The reviewed mobile code does not implement automatic server-record expiry or scheduled account deletion, and it does not establish a fixed cloud retention period. Records may remain stored after logout. The team's retention periods, deletion-response time, backup handling, and any justified exceptions have not yet been finalized for this policy; deployed retention settings also require review.",
+        "To request account deletion, email quadlabs2026@gmail.com with the subject 'Bantay Ulang account deletion' and identify your registered account email. Send the request from your registered email where possible. The team must verify ownership before handling the request; do not send your password. You can also contact this address about access, correction, or privacy questions.",
+        "Signing out clears the app's saved approval and signs out the account, but does not erase cloud records or all cached records and notification preferences on the device. The seven-day offline-access limit is an access limit, not a guarantee that cached data is erased after seven days. Clearing app storage removes local app data without deleting server records. Firebase's own service retention and backup removal are separate from the team's retention decisions."
+      ]
+    },
+    {
+      "id": "notifications",
+      "title": "Notifications and Permissions",
+      "paragraphs": [
+        "The app uses local device notifications for farm alerts and assigned tasks received through Firestore listeners. It requests notification permission where required and creates Android notification channels for alerts and tasks. It does not use FCM push messaging in the current implementation; delivery while the app is stopped is not guaranteed.",
+        "You can allow or disable notifications in your device's app notification settings and, on Android, manage the alert/task channels. Notification titles and descriptions can appear on the lock screen according to your device settings. Local notification identifiers are saved to avoid showing the same notice repeatedly."
+      ]
+    },
+    {
+      "id": "children",
+      "title": "Children's Privacy",
+      "paragraphs": [
+        "Bantay Ulang is designed for aquaponics practitioners and farm administrators and is not designed for users under 13 years of age. If you believe a child under 13 has provided personal information, contact the Bantay Ulang development team at quadlabs2026@gmail.com so the information can be reviewed."
+      ]
+    },
+    {
+      "id": "contact",
+      "title": "Contact Information",
+      "paragraphs": [
+        "For privacy concerns, questions about your information, or account and data deletion requests, contact the Bantay Ulang development team at quadlabs2026@gmail.com. Identify your registered account email where relevant. Never send your account password."
+      ]
+    },
+    {
+      "id": "updates",
+      "title": "Policy Updates",
+      "paragraphs": [
+        "This policy should be updated when app features, processors, or data-handling practices change. The policy in the app and the published web version should carry matching wording."
+      ]
+    }
+  ]
+}

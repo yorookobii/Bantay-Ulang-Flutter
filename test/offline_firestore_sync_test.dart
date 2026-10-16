@@ -9,17 +9,20 @@ void main() {
   late FakeFirebaseFirestore db;
   late FirestoreSyncBackend backend;
   final cycleStart = DateTime.utc(2026, 10, 1).millisecondsSinceEpoch;
-  RecordSubmission death({String id = 'death-a', int week = 2}) =>
-      exampleOperation(
-        id: id,
-        kind: OperationKind.mortality,
-        payload: {
-          'cycleId': 'cycle',
-          'cycleStart': cycleStart,
-          'weekNumber': week,
-          'deathCount': 3,
-        },
-      );
+  RecordSubmission death({
+    String id = 'death-a',
+    int week = 2,
+    int count = 3,
+  }) => exampleOperation(
+    id: id,
+    kind: OperationKind.mortality,
+    payload: {
+      'cycleId': 'cycle',
+      'cycleStart': cycleStart,
+      'weekNumber': week,
+      'deathCount': count,
+    },
+  );
   setUp(() async {
     db = FakeFirebaseFirestore();
     backend = FirestoreSyncBackend(db, () => 'farmer-a');
@@ -72,34 +75,68 @@ void main() {
     expect(data['createdBy'], 'farmer-a');
   });
   test(
-    'second mobile mortality submission for the same week is rejected',
+    'separate single-death entries in the same week are saved without retry duplicates',
     () async {
-      await backend.upload(death());
-      await expectLater(
-        backend.upload(death(id: 'death-other-device')),
-        throwsA(isA<SyncConflict>()),
-      );
+      final first = death(count: 1);
+      final second = death(id: 'death-other-device', count: 1);
+      await backend.upload(first);
+      final before = (await db.doc('mortality_records/${first.id}').get())
+          .data()!;
+      await backend.upload(second);
+      await backend.upload(first);
+      await backend.upload(second);
+      final records = (await db.collection('mortality_records').get()).docs;
+      final logs = (await db.collection('logs').get()).docs;
+      expect(records, hasLength(2));
+      expect(logs, hasLength(2));
+      expect(records.map((d) => d.id), unorderedEquals(logs.map((d) => d.id)));
+      for (final record in records) {
+        final log = logs.singleWhere((d) => d.id == record.id).data();
+        expect(record.data()['deathCount'], 1);
+        expect(record.data()['weekNumber'], 2);
+        expect(record.data()['recordedBy'], 'farmer-a');
+        expect(record.data()['observedAt'], log['observedAt']);
+      }
       expect(
-        (await db.collection('mortality_records').get()).docs,
-        hasLength(1),
+        (await db.doc('mortality_records/${first.id}').get()).data(),
+        before,
       );
-      expect((await db.collection('logs').get()).docs, hasLength(1));
-      await backend.upload(death());
+      await backend.recalculate('cycle', cycleStart);
       expect(
-        (await db.collection('mortality_records').get()).docs,
-        hasLength(1),
+        (await db.doc('growth_indicators/cycle').get()).data()!['survivalRate'],
+        98.0,
       );
     },
   );
-  test('legacy random-ID weekly mortality records are recognized', () async {
-    await db.doc('mortality_records/old-web-entry').set({
-      'weekNumber': 2,
-      'deathCount': 1,
-      'createdAt': Timestamp.fromDate(DateTime.utc(2026, 10, 9)),
-    });
-    await expectLater(backend.upload(death()), throwsA(isA<SyncConflict>()));
-    expect((await db.collection('logs').get()).docs, isEmpty);
-  });
+  for (final legacyId in ['old-web-entry', 'offline_Y3ljbGU_${cycleStart}_2']) {
+    test(
+      'existing mortality $legacyId is preserved and allows another entry',
+      () async {
+        final original = {
+          'weekNumber': 2,
+          'deathCount': 1,
+          'createdAt': Timestamp.fromDate(DateTime.utc(2026, 10, 9)),
+        };
+        await db.doc('mortality_records/$legacyId').set(original);
+        await backend.upload(death(count: 1));
+        expect(
+          (await db.collection('mortality_records').get()).docs,
+          hasLength(2),
+        );
+        expect(
+          (await db.doc('mortality_records/$legacyId').get()).data(),
+          original,
+        );
+        expect((await db.collection('logs').get()).docs, hasLength(1));
+        await backend.recalculate('cycle', cycleStart);
+        expect(
+          (await db.doc('growth_indicators/cycle').get())
+              .data()!['survivalRate'],
+          98.0,
+        );
+      },
+    );
+  }
 
   test('a previous week does not block the current week', () async {
     await backend.upload(death(id: 'last-week', week: 1));

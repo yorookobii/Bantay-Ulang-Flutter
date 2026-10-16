@@ -7,6 +7,7 @@ import 'package:demo_1_langto/offline/session_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'support/offline_fakes.dart';
 
@@ -20,6 +21,7 @@ void main() {
   setUpAll(sqfliteFfiInit);
   setUp(() async {
     GoogleFonts.config.allowRuntimeFetching = false;
+    SharedPreferences.setMockInitialValues({});
     store = await OfflineStore.open(
       databasePath: inMemoryDatabasePath,
       factory: databaseFactoryFfi,

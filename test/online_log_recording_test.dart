@@ -323,6 +323,349 @@ void main() {
     await close(tester);
   });
   testWidgets(
+    'growth graph includes only observations in the current admin cycle',
+    (tester) async {
+      final start = DateTime(2026, 10, 1, 12, 30);
+      final nextWeek = start.add(const Duration(days: 7));
+      final records = {
+        'previous-cycle': {
+          'createdAt': Timestamp.fromDate(start),
+          'observedAt': Timestamp.fromDate(
+            start.subtract(const Duration(microseconds: 1)),
+          ),
+          'weight': 900.0,
+        },
+        'delayed-old-upload': {
+          'createdAt': Timestamp.fromDate(start.add(const Duration(days: 3))),
+          'observedAt': Timestamp.fromDate(
+            start.subtract(const Duration(days: 3)),
+          ),
+          'weight': 900.0,
+        },
+        'legacy-old': {
+          'createdAt': Timestamp.fromDate(
+            start.subtract(const Duration(days: 1)),
+          ),
+          'weight': 900.0,
+        },
+        'exact-start': {
+          'createdAt': Timestamp.fromDate(start),
+          'observedAt': Timestamp.fromDate(start),
+          'weight': 10.0,
+        },
+        'current': {
+          'createdAt': Timestamp.fromDate(start.add(const Duration(days: 3))),
+          'observedAt': Timestamp.fromDate(start.add(const Duration(days: 3))),
+          'weight': 20.0,
+        },
+        'legacy-current': {
+          'createdAt': Timestamp.fromDate(start.add(const Duration(days: 5))),
+          'weight': 30.0,
+        },
+        'exact-next-week': {
+          'createdAt': Timestamp.fromDate(nextWeek),
+          'observedAt': Timestamp.fromDate(nextWeek),
+          'weight': 40.0,
+        },
+      };
+      await firestore.doc('growth_indicators/cycle').update({
+        'cycleStart': Timestamp.fromDate(start),
+      });
+      for (final entry in records.entries) {
+        await firestore
+            .doc('ulang_growth_records/${entry.key}')
+            .set(entry.value);
+      }
+      await openForm(tester, OperationKind.ulang);
+      List<Map<String, dynamic>> plottedWeeks() {
+        final chart = tester.widget<CustomPaint>(
+          find.byWidgetPredicate(
+            (widget) =>
+                widget is CustomPaint &&
+                widget.painter is WeeklyGrowthLinePainter,
+          ),
+        );
+        return (chart.painter! as WeeklyGrowthLinePainter).data;
+      }
+
+      final weeks = plottedWeeks();
+      expect(weeks.map((week) => week['weekNumber']), [1, 2]);
+      expect(weeks.first['count'], 3);
+      expect(weeks.first['totalWeight'], 60.0);
+      expect(weeks.first['avgWeight'], 20.0);
+      expect(weeks.last['count'], 1);
+      expect(weeks.last['totalWeight'], 40.0);
+      expect(weeks.last['latestObservation'], nextWeek);
+
+      await tester.runAsync(
+        () => firestore.doc('growth_indicators/cycle').update({
+          'cycleStart': Timestamp.fromDate(nextWeek),
+        }),
+      );
+      await settle(tester);
+      final remaining = plottedWeeks().single;
+      expect(remaining['weekNumber'], 1);
+      expect(remaining['count'], 1);
+      expect(remaining['totalWeight'], 40.0);
+      await tester.runAsync(() async {
+        for (final entry in records.entries) {
+          expect(
+            (await firestore.doc('ulang_growth_records/${entry.key}').get())
+                .data(),
+            entry.value,
+          );
+        }
+        expect(firestore.transactionCalls, 0);
+      });
+      await close(tester);
+    },
+  );
+  for (final missingStart in [false, true]) {
+    testWidgets(
+      'growth graph stays empty with only past records (missing admin start: $missingStart)',
+      (tester) async {
+        final start = DateTime(2026, 10, 10);
+        await firestore.doc('growth_indicators/cycle').update({
+          'cycleStart': missingStart
+              ? FieldValue.delete()
+              : Timestamp.fromDate(start),
+        });
+        await firestore.doc('ulang_growth_records/past').set({
+          'createdAt': Timestamp.fromDate(
+            start.subtract(const Duration(days: 1)),
+          ),
+          'weight': 900.0,
+        });
+        await openForm(tester, OperationKind.ulang);
+        expect(
+          find.byWidgetPredicate(
+            (widget) =>
+                widget is CustomPaint &&
+                widget.painter is WeeklyGrowthLinePainter,
+          ),
+          findsNothing,
+        );
+        expect(
+          find.text('Wala pang naitalang lingguhang paglaki'),
+          findsOneWidget,
+        );
+        await close(tester);
+      },
+    );
+  }
+  testWidgets(
+    'mortality recorded weeks follow the admin cycle without duplicate date ranges',
+    (tester) async {
+      final yesterday = DateTime(2026, 10, 14, 12);
+      final today = DateTime(2026, 10, 15, 12);
+      final originals = {
+        'yesterday': {
+          'deathCount': 1,
+          'weekNumber': 99,
+          'recordedBy': 'farmer-a',
+          'createdAt': Timestamp.fromDate(yesterday),
+          'observedAt': Timestamp.fromDate(yesterday),
+        },
+        'today': {
+          'deathCount': 2,
+          'weekNumber': 1,
+          'recordedBy': 'farmer-a',
+          'createdAt': Timestamp.fromDate(today),
+          'observedAt': Timestamp.fromDate(today),
+        },
+      };
+      await firestore.doc('growth_indicators/cycle').update({
+        'cycleStart': Timestamp.fromDate(DateTime(2026, 10, 1)),
+      });
+      for (final entry in originals.entries) {
+        await firestore.doc('mortality_records/${entry.key}').set(entry.value);
+      }
+      await openForm(tester, OperationKind.mortality);
+      expect(find.text('Linggo ng cycle: 2'), findsOneWidget);
+      expect(find.text('Linggo ng cycle: 3'), findsOneWidget);
+      expect(find.textContaining('Linggo ng cycle: 2 ('), findsNothing);
+      expect(find.textContaining('Linggo ng cycle: 3 ('), findsNothing);
+      expect(find.text('10/14/2026'), findsOneWidget);
+      expect(find.text('10/15/2026'), findsOneWidget);
+
+      // A new latest admin parameter document updates the same historical dates.
+      await tester.runAsync(() async {
+        await firestore.doc('growth_indicators/new-admin-cycle').set({
+          'timestamp': Timestamp.fromDate(
+            DateTime.now().add(const Duration(days: 1)),
+          ),
+          'cycleStart': Timestamp.fromDate(DateTime(2026, 10, 8)),
+          'initialStock': 100,
+        });
+      });
+      await settle(tester);
+      expect(find.text('Linggo ng cycle: 1'), findsOneWidget);
+      expect(find.text('Linggo ng cycle: 2'), findsOneWidget);
+      expect(find.text('Linggo ng cycle: 3'), findsNothing);
+      expect(find.text('10/14/2026'), findsOneWidget);
+      expect(find.text('10/15/2026'), findsOneWidget);
+      await tester.runAsync(() async {
+        for (final entry in originals.entries) {
+          expect(
+            (await firestore.doc('mortality_records/${entry.key}').get())
+                .data(),
+            entry.value,
+          );
+        }
+        expect((await firestore.collection('logs').get()).docs, isEmpty);
+        expect(firestore.transactionCalls, 0);
+      });
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      await tester.pumpAndSettle();
+      expect(find.text('Linggo ng cycle: 1'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await close(tester);
+    },
+  );
+  testWidgets(
+    'mortality recorded weeks honor exact boundaries and observation timestamp priority',
+    (tester) async {
+      final start = DateTime(2026, 10, 1);
+      final boundary = start.add(const Duration(days: 7));
+      await firestore.doc('growth_indicators/cycle').update({
+        'cycleStart': Timestamp.fromDate(start),
+      });
+      await firestore.doc('mortality_records/before-boundary').set({
+        'createdAt': Timestamp.fromDate(start.add(const Duration(days: 9))),
+        'observedAt': Timestamp.fromDate(
+          boundary.subtract(const Duration(microseconds: 1)),
+        ),
+        'deathCount': 1,
+        'weekNumber': 42,
+      });
+      await firestore.doc('mortality_records/at-boundary').set({
+        'createdAt': Timestamp.fromDate(start.add(const Duration(days: 14))),
+        'observedAt': Timestamp.fromDate(boundary.toUtc()),
+        'deathCount': 1,
+        'weekNumber': 42,
+      });
+      await firestore.doc('mortality_records/legacy-created-time').set({
+        'createdAt': Timestamp.fromDate(start.add(const Duration(days: 14))),
+        'deathCount': 1,
+        'weekNumber': 42,
+      });
+      await openForm(tester, OperationKind.mortality);
+      expect(find.text('Linggo ng cycle: 1'), findsOneWidget);
+      expect(find.text('Linggo ng cycle: 2'), findsOneWidget);
+      expect(find.text('Linggo ng cycle: 3'), findsOneWidget);
+      expect(find.text('Linggo: 42'), findsNothing);
+      await close(tester);
+    },
+  );
+  for (final noDocument in [false, true]) {
+    testWidgets(
+      'mortality recorded week is unavailable without admin start (no document: $noDocument)',
+      (tester) async {
+        if (noDocument) {
+          await firestore.doc('growth_indicators/cycle').delete();
+        } else {
+          await firestore.doc('growth_indicators/cycle').update({
+            'cycleStart': FieldValue.delete(),
+          });
+        }
+        await firestore.doc('mortality_records/earlier').set({
+          'createdAt': Timestamp.now(),
+          'deathCount': 1,
+          'weekNumber': 99,
+        });
+        await openForm(tester, OperationKind.mortality);
+        expect(find.text('Linggo ng cycle: Hindi available'), findsOneWidget);
+        expect(find.text('Linggo: 99'), findsNothing);
+        await close(tester);
+      },
+    );
+  }
+  testWidgets(
+    'mortality recorded before the admin cycle is not assigned week one',
+    (tester) async {
+      final start = DateTime(2026, 10, 1);
+      await firestore.doc('growth_indicators/cycle').update({
+        'cycleStart': Timestamp.fromDate(start),
+      });
+      for (final entry in {
+        'previous-day': start.subtract(const Duration(days: 1)),
+        'just-before': start.subtract(const Duration(microseconds: 1)),
+        'at-start': start,
+      }.entries) {
+        await firestore.doc('mortality_records/${entry.key}').set({
+          'createdAt': Timestamp.fromDate(entry.value),
+          'deathCount': 1,
+          'weekNumber': 1,
+        });
+      }
+      await openForm(tester, OperationKind.mortality);
+      expect(find.text('Bago ang kasalukuyang cycle'), findsNWidgets(2));
+      expect(find.text('Linggo ng cycle: 1'), findsOneWidget);
+      await close(tester);
+    },
+  );
+  testWidgets(
+    'mortality recorded week is unknown without a recording timestamp',
+    (tester) async {
+      await firestore.doc('mortality_records/undated').set({
+        'createdAt': null,
+        'deathCount': 1,
+        'weekNumber': 99,
+      });
+      await openForm(tester, OperationKind.mortality);
+      expect(
+        find.text('Linggo ng cycle: Hindi matukoy ang petsa'),
+        findsOneWidget,
+      );
+      expect(find.text('Linggo: 99'), findsNothing);
+      await close(tester);
+    },
+  );
+  testWidgets(
+    'four single-death entries in one week save separate cards and update survival',
+    (tester) async {
+      await openForm(tester, OperationKind.mortality);
+      expect(find.text('Bilang ng namatay sa talang ito'), findsOneWidget);
+      for (var count = 1; count <= 4; count++) {
+        await tester.enterText(find.byType(TextField).at(2), '1');
+        await submit(tester, OperationKind.mortality);
+        expect(find.textContaining('Matagumpay na na-save'), findsOneWidget);
+        expect(
+          tester
+              .widget<TextField>(find.byType(TextField).at(2))
+              .controller!
+              .text,
+          isEmpty,
+        );
+        await tester.runAsync(() async {
+          final records =
+              (await firestore.collection('mortality_records').get()).docs;
+          final logs = (await firestore.collection('logs').get()).docs;
+          expect(records, hasLength(count));
+          expect(logs, hasLength(count));
+          expect(
+            records.map((d) => d.id),
+            unorderedEquals(logs.map((d) => d.id)),
+          );
+          expect(records.every((d) => d.data()['deathCount'] == 1), isTrue);
+          expect(records.every((d) => d.data()['weekNumber'] == 1), isTrue);
+          expect(
+            (await firestore.doc('growth_indicators/cycle').get())
+                .data()!['survivalRate'],
+            100 - count,
+          );
+        });
+      }
+      expect(find.text('Namatay: 1'), findsNWidgets(3));
+      final more = find.text('See More (+1)');
+      await tester.ensureVisible(more);
+      await tester.tap(more);
+      await tester.pumpAndSettle();
+      expect(find.text('Namatay: 1'), findsNWidgets(4));
+      await close(tester);
+    },
+  );
+  testWidgets(
     'mortality can be recorded again after server mortality records are reset',
     (tester) async {
       await openForm(tester, OperationKind.mortality);
@@ -350,13 +693,25 @@ void main() {
           96,
         );
       });
-      // A real server record still blocks a second entry for the same week.
+      // Another death in the same week creates its own entry.
       await tester.enterText(find.byType(TextField).at(2), '3');
       await submit(tester, OperationKind.mortality);
-      expect(find.textContaining('A record already exists'), findsOneWidget);
-      expectValues(tester, OperationKind.mortality);
+      expect(find.textContaining('Matagumpay na na-save'), findsOneWidget);
+      expect(
+        tester.widget<TextField>(find.byType(TextField).at(2)).controller!.text,
+        isEmpty,
+      );
       await tester.runAsync(() async {
-        expect((await firestore.collection('logs').get()).docs, hasLength(2));
+        expect(
+          (await firestore.collection('mortality_records').get()).docs,
+          hasLength(2),
+        );
+        expect((await firestore.collection('logs').get()).docs, hasLength(3));
+        expect(
+          (await firestore.doc('growth_indicators/cycle').get())
+              .data()!['survivalRate'],
+          93,
+        );
       });
       await close(tester);
     },

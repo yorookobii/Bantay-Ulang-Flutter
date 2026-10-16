@@ -10,6 +10,7 @@ import 'yield.dart';
 import 'logs.dart';
 import 'logout_confirmation_dialog.dart';
 import 'phone_back_logout.dart';
+import 'settings.dart';
 
 export 'logout_confirmation_dialog.dart'
     show LogoutConfirmationDialog, showLogoutConfirmationDialog;
@@ -292,6 +293,22 @@ class _ProfilePageState extends State<ProfilePage> with TickerProviderStateMixin
                 ),
               ),
               const SizedBox(height: 32),
+
+              ListTile(
+                key: const Key('profile_settings'),
+                leading: Icon(Icons.settings_outlined, color: tealDark),
+                title: Text('Settings', style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w600, color: tealDark,
+                )),
+                trailing: Icon(Icons.chevron_right, color: tealDark),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    settings: const RouteSettings(name: '/settings'),
+                    builder: (_) => const SettingsPage(),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
 
               // Update Button
               Material(

@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'offline_models.dart';
 
@@ -17,8 +16,6 @@ class FirestoreSyncBackend implements SyncBackend {
   final FirebaseFirestore firestore;
   final String? Function() currentUid;
   static const server = GetOptions(source: Source.server);
-  static String mortalityId(String cycleId, int cycleStart, int week) =>
-      'offline_${base64Url.encode(utf8.encode(cycleId)).replaceAll('=', '')}_${cycleStart}_$week';
 
   Future<QueryDocumentSnapshot<Map<String, dynamic>>?> _ownedLog(
     RecordSubmission op,
@@ -54,19 +51,10 @@ class FirestoreSyncBackend implements SyncBackend {
     final p = op.payload;
     final log = firestore.collection('logs').doc(op.id);
     final growth = firestore.collection('ulang_growth_records').doc(op.id);
+    // Each observation has its own pair; retrying this operation uses the same ID.
     final death = op.kind == OperationKind.mortality
-        ? firestore
-              .collection('mortality_records')
-              .doc(
-                mortalityId(
-                  p['cycleId'] as String,
-                  p['cycleStart'] as int,
-                  p['weekNumber'] as int,
-                ),
-              )
+        ? firestore.collection('mortality_records').doc(op.id)
         : null;
-    // Also recognize records created by earlier app/web versions with random IDs.
-    var legacyDuplicate = false;
     if (death != null) {
       final latest = await firestore
           .collection('growth_indicators')
@@ -90,18 +78,6 @@ class FirestoreSyncBackend implements SyncBackend {
           'The farming cycle changed. Please review your entry before submitting again.',
         );
       }
-      final records = await firestore
-          .collection('mortality_records')
-          .where(
-            'createdAt',
-            isGreaterThanOrEqualTo: Timestamp.fromMillisecondsSinceEpoch(
-              p['cycleStart'] as int,
-            ),
-          )
-          .get(server);
-      legacyDuplicate = records.docs.any(
-        (d) => d.id != death.id && d.data()['weekNumber'] == p['weekNumber'],
-      );
     }
     await firestore.runTransaction((tx) async {
       check();
@@ -158,7 +134,7 @@ class FirestoreSyncBackend implements SyncBackend {
       }
       if (savedPair?.exists == true) {
         throw const SyncConflict(
-          'A record already exists for this entry or week. Please review the records.',
+          'A record already exists for this entry. Please review the records.',
         );
       }
       if (death != null) {
@@ -170,11 +146,6 @@ class FirestoreSyncBackend implements SyncBackend {
             p['cycleStart']) {
           throw const SyncConflict(
             'The farming cycle changed. Please review this entry.',
-          );
-        }
-        if (legacyDuplicate) {
-          throw const SyncConflict(
-            'Mortality is already recorded for this week.',
           );
         }
       }

@@ -302,6 +302,15 @@ class _LogsPageState extends State<LogsPage>
     return (date.difference(cycleStart).inDays ~/ 7) + 1;
   }
 
+  String _mortalityCycleWeekLabel(DateTime? observedAt) {
+    final start = _cycleStart;
+    if (start == null) return 'Linggo ng cycle: Hindi available';
+    if (observedAt == null) return 'Linggo ng cycle: Hindi matukoy ang petsa';
+    if (observedAt.isBefore(start)) return 'Bago ang kasalukuyang cycle';
+    final week = _weekNumberFor(observedAt, start);
+    return 'Linggo ng cycle: $week';
+  }
+
   @override
   void dispose() {
     _cacheStatus.dispose();
@@ -544,25 +553,8 @@ class _LogsPageState extends State<LogsPage>
   List<Map<String, dynamic>> getWeeklyGrowthData() {
     if (_ulangGrowthRecords.isEmpty) return [];
 
-    // Determine cycle start baseline
-    DateTime? cycleStart = _cycleStart;
-    if (cycleStart == null) {
-      DateTime? earliest;
-      for (final doc in _ulangGrowthRecords) {
-        final data = doc.data() as Map<String, dynamic>;
-        final ts = (data['observedAt'] ?? data['createdAt']) as Timestamp?;
-        if (ts != null) {
-          final d = ts.toDate();
-          if (earliest == null || d.isBefore(earliest)) {
-            earliest = d;
-          }
-        }
-      }
-      if (earliest != null) {
-        cycleStart = DateTime(earliest.year, earliest.month, earliest.day);
-      }
-    }
-
+    // Only the admin's current cycle can define the graph's records and weeks.
+    final cycleStart = _cycleStart;
     if (cycleStart == null) return [];
 
     final Map<int, List<({double weight, DateTime date})>> weekBuckets = {};
@@ -571,10 +563,9 @@ class _LogsPageState extends State<LogsPage>
       final data = doc.data() as Map<String, dynamic>;
       final ts = (data['observedAt'] ?? data['createdAt']) as Timestamp?;
       if (ts == null) continue;
-      final rawDate = ts.toDate();
-      final date = DateTime(rawDate.year, rawDate.month, rawDate.day);
-      int weekNum = _weekNumberFor(date, cycleStart);
-      if (weekNum < 1) weekNum = 1;
+      final date = ts.toDate();
+      if (date.isBefore(cycleStart)) continue;
+      final weekNum = _weekNumberFor(date, cycleStart);
 
       final weight = (data['weight'] as num?)?.toDouble();
       if (weight == null || weight <= 0) continue;
@@ -592,7 +583,7 @@ class _LogsPageState extends State<LogsPage>
       final int count = records.length;
       final double avgWeight = count > 0 ? (totalWeight / count) : 0.0;
 
-      final weekStart = cycleStart!.add(Duration(days: (weekNum - 1) * 7));
+      final weekStart = cycleStart.add(Duration(days: (weekNum - 1) * 7));
       final weekEnd = weekStart.add(const Duration(days: 6));
 
       DateTime? latestDate;
@@ -814,7 +805,7 @@ class _LogsPageState extends State<LogsPage>
           _buildUlangForm(),
           const SizedBox(height: 24),
 
-          _buildSectionTitle("Lingguhang Mortality"),
+          _buildSectionTitle("Magtala ng Mortality"),
           const SizedBox(height: 12),
           _buildMortalityForm(),
           const SizedBox(height: 24),
@@ -1470,7 +1461,7 @@ class _LogsPageState extends State<LogsPage>
         children: [
           _buildInputField(
             mortalityController,
-            "Ilang namatay ngayong linggo?",
+            "Bilang ng namatay sa talang ito",
             keyboardType: TextInputType.number,
           ),
           const SizedBox(height: 20),
@@ -1676,7 +1667,6 @@ class _LogsPageState extends State<LogsPage>
   Widget _buildMortalityLogCard(QueryDocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
     final deathCount = data['deathCount'] ?? 0;
-    final weekNumber = data['weekNumber'] ?? '—';
     final ts = (data['observedAt'] ?? data['createdAt']) as Timestamp?;
     final date = ts?.toDate();
     final formattedDate = date != null
@@ -1730,7 +1720,7 @@ class _LogsPageState extends State<LogsPage>
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Linggo: $weekNumber',
+                  _mortalityCycleWeekLabel(date),
                   style: GoogleFonts.poppins(fontSize: 13, color: textMuted),
                 ),
               ],
