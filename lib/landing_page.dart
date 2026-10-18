@@ -57,6 +57,7 @@ class _DashboardPageState extends State<DashboardPage>
   double? _salinity;
   double? _tds;
   double? _turbidity;
+  DateTime? _sensorMeasuredAt;
   double? _waterLevel;
   double? get waterLevel => _waterLevel;
 
@@ -159,6 +160,7 @@ class _DashboardPageState extends State<DashboardPage>
             final data = snapshot.data() as Map<String, dynamic>?;
             final stats = data?['statistics'] as Map<String, dynamic>?;
             setState(() {
+              _sensorMeasuredAt = _parseSensorMeasuredAt(data?['measuredAt']);
               _waterTemp = (stats?['waterTemperatureC']?['average'] as num?)?.toDouble();
               _phLevel = (stats?['phValue']?['average'] as num?)?.toDouble();
               _dissolvedOxygen = (stats?['oxygenLevelMgL']?['average'] as num?)?.toDouble();
@@ -172,6 +174,36 @@ class _DashboardPageState extends State<DashboardPage>
             debugPrint('Sensor readings subscription error: $error');
           },
         );
+  }
+
+  // Match the admin's measuredAt source; never substitute the fetch time.
+  DateTime? _parseSensorMeasuredAt(Object? value) {
+    if (value is Timestamp) return value.toDate();
+    if (value is DateTime) return value;
+    if (value is String) return DateTime.tryParse(value);
+    final milliseconds = value is num
+        ? value
+        : value is Map && value['seconds'] is num
+            ? (value['seconds'] as num) * 1000
+            : null;
+    if (milliseconds == null || !milliseconds.isFinite) return null;
+    try {
+      return DateTime.fromMillisecondsSinceEpoch(
+        milliseconds.round(),
+        isUtc: true,
+      );
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  String get _sensorReadingTime {
+    final measuredAt = _sensorMeasuredAt?.toLocal();
+    if (measuredAt == null) return '--';
+    final hour = measuredAt.hour % 12 == 0 ? 12 : measuredAt.hour % 12;
+    final minute = measuredAt.minute.toString().padLeft(2, '0');
+    final period = measuredAt.hour < 12 ? 'AM' : 'PM';
+    return '${hour.toString().padLeft(2, '0')}:$minute $period';
   }
 
   void _subscribeAlerts() {
@@ -371,6 +403,7 @@ class _DashboardPageState extends State<DashboardPage>
       }
 
       setState(() {
+        _sensorMeasuredAt = _parseSensorMeasuredAt(sensorData?['measuredAt']);
         _waterTemp = refreshedWaterTemp;
         _phLevel = refreshedPh;
         _dissolvedOxygen = refreshedDissolvedOxygen;
@@ -1216,6 +1249,12 @@ class _DashboardPageState extends State<DashboardPage>
         // Big Card: Living Assets (Ulang Yield & Plant Status) with primary visual emphasis
         _buildLivingAssetsHeroCard(),
         const SizedBox(height: 14),
+        Text(
+          'Last reading: $_sensorReadingTime',
+          key: const Key('dashboard_reading_time'),
+          style: GoogleFonts.poppins(fontSize: 12, color: textMuted),
+        ),
+        const SizedBox(height: 8),
 
         // Row 1: pH Level & Dissolved Oxygen
         IntrinsicHeight(

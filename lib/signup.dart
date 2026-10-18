@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'password_validation.dart';
 import 'offline/offline_services.dart';
 import 'privacy_policy.dart';
+import 'terms_and_conditions.dart';
 
 enum AuthMessageKind { success, error, warning, info }
 
@@ -806,6 +807,19 @@ class _SignupPageState extends State<SignupPage> {
                   ),
                 ),
                 child: Text('Privacy Policy', style: GoogleFonts.poppins(
+                  color: _tealDark, fontSize: 13,
+                  decoration: TextDecoration.underline,
+                )),
+              ),
+              TextButton(
+                key: const Key('auth_terms_and_conditions'),
+                onPressed: _isLoading ? null : () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    settings: const RouteSettings(name: '/terms'),
+                    builder: (_) => const TermsAndConditionsPage(),
+                  ),
+                ),
+                child: Text('Terms and Conditions', style: GoogleFonts.poppins(
                   color: _tealDark, fontSize: 13,
                   decoration: TextDecoration.underline,
                 )),

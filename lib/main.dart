@@ -12,6 +12,7 @@ import 'offline/offline_widgets.dart';
 import 'phone_back_logout.dart';
 import 'signup.dart';
 import 'privacy_policy.dart';
+import 'terms_and_conditions.dart';
 import 'settings.dart';
 
 void main() async {
@@ -92,6 +93,7 @@ class _MyAppState extends State<MyApp> {
         ),
         routes: {
           '/privacy': (context) => const PrivacyPolicyPage(),
+          '/terms': (context) => const TermsAndConditionsPage(),
           '/settings': (context) => const SettingsPage(),
           '/login': (context) => const SignupPage(),
           '/session': (context) => const SessionEntry(),

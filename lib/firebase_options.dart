@@ -44,7 +44,7 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyBz9q6lml9muXd6zCtgdrL8-rLtDFWm14E',
-    appId: '1:827033380382:android:f5ac08f92209c0e15e300f',
+    appId: '1:827033380382:android:71a3fa25da8f2c9a5e300f',
     messagingSenderId: '827033380382',
     projectId: 'bantay-ulang',
     storageBucket: 'bantay-ulang.firebasestorage.app',

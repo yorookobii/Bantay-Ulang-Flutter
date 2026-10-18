@@ -7,6 +7,7 @@ import 'package:demo_1_langto/offline/offline_services.dart';
 import 'package:demo_1_langto/privacy_policy.dart';
 import 'package:demo_1_langto/settings.dart';
 import 'package:demo_1_langto/signup.dart';
+import 'package:demo_1_langto/terms_and_conditions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -20,6 +21,7 @@ void main() {
 
   setUpAll(() async {
     document = await PrivacyPolicyDocument.load();
+    await TermsAndConditionsDocument.load();
     await (FontLoader(
       'MaterialIcons',
     )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
@@ -128,6 +130,20 @@ void main() {
               .text,
           register ? 'Farm Practitioner' : 'farm@example.com',
         );
+        final termsLink = find.byKey(const Key('auth_terms_and_conditions'));
+        await tester.ensureVisible(termsLink);
+        await tester.tap(termsLink);
+        await settle(tester);
+        expect(find.byType(TermsAndConditionsPage), findsOneWidget);
+        expect(find.text('Last updated: October 16, 2026'), findsOneWidget);
+        expect(find.textContaining('recording Ulang and plant growth'), findsOneWidget);
+        await tester.ensureVisible(find.text('12. Contact Information'));
+        await tester.pageBack();
+        await settle(tester);
+        expect(
+          tester.widget<TextFormField>(find.byType(TextFormField).first).controller!.text,
+          register ? 'Farm Practitioner' : 'farm@example.com',
+        );
         expect(tester.takeException(), isNull);
       },
     );
@@ -140,6 +156,12 @@ void main() {
     await tester.tap(find.byKey(const Key('settings_privacy_policy')));
     await settle(tester);
     expect(find.byType(PrivacyPolicyPage), findsOneWidget);
+    await tester.pageBack();
+    await settle(tester);
+    expect(find.byType(SettingsPage), findsOneWidget);
+    await tester.tap(find.byKey(const Key('settings_terms_and_conditions')));
+    await settle(tester);
+    expect(find.byType(TermsAndConditionsPage), findsOneWidget);
     await tester.pageBack();
     await settle(tester);
     expect(find.byType(SettingsPage), findsOneWidget);
@@ -158,6 +180,12 @@ void main() {
       await tester.pump(const Duration(seconds: 3));
       expect(find.byType(PrivacyPolicyPage), findsOneWidget);
       expect(NotificationService.navigatorKey.currentState!.canPop(), isFalse);
+      NotificationService.navigatorKey.currentState!.pushNamedAndRemoveUntil(
+        '/terms',
+        (_) => false,
+      );
+      await settle(tester);
+      expect(find.byType(TermsAndConditionsPage), findsOneWidget);
       NotificationService.navigatorKey.currentState!.pushNamedAndRemoveUntil(
         '/settings',
         (_) => false,
@@ -226,6 +254,14 @@ void main() {
           await settle(tester);
           expect(tester.takeException(), isNull);
           if (layout.name == 'phone') await capture('privacy-footer');
+          await tester.pumpWidget(const SizedBox());
+          await tester.pumpWidget(app(const TermsAndConditionsPage(), layout.scale));
+          await settle(tester);
+          await capture('terms-${layout.name}');
+          expect(tester.takeException(), isNull);
+          await tester.ensureVisible(find.text('12. Contact Information'));
+          await settle(tester);
+          expect(tester.takeException(), isNull);
           await tester.pumpWidget(const SizedBox());
           await tester.pumpWidget(app(const SettingsPage(), layout.scale));
           await settle(tester);

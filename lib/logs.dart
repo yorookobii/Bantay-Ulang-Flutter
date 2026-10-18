@@ -95,9 +95,9 @@ class _LogsPageState extends State<LogsPage>
 
   // Ulang input ranges
   static const double _sizeMin = 0.1;
-  static const double _sizeMax = 30.0;
+  static const double _sizeMax = 50.0;
   static const double _weightMin = 0.1;
-  static const double _weightMax = 500.0;
+  static const double _weightMax = 750.0;
 
   // Plant height range
   static const double _heightMin = 0.0;

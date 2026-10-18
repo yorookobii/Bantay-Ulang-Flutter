@@ -3,6 +3,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
+import 'package:cloud_firestore/cloud_firestore.dart' show Timestamp;
 import 'package:cloud_firestore_platform_interface/cloud_firestore_platform_interface.dart'
     show FieldPath;
 import 'package:cloud_firestore_platform_interface/src/pigeon/messages.pigeon.dart'
@@ -63,6 +64,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     await transport.document('Aquaponics/Ulang', {
+      'measuredAt': Timestamp.fromDate(DateTime(2026, 10, 17, 14, 5, 9)),
       'statistics': {
         'phValue': {'average': 8.2},
         'waterTemperatureC': {'average': 28},
@@ -78,6 +80,62 @@ void main() {
   String? value(WidgetTester tester, WaterParameter parameter) => tester
       .widget<Text>(find.byKey(ValueKey('water_value_${parameter.name}')))
       .data;
+
+  String? readingTime(WidgetTester tester) => tester
+      .widget<Text>(find.byKey(const Key('dashboard_reading_time')))
+      .data;
+
+  testWidgets('reading time follows measuredAt, even with unchanged values', (
+    tester,
+  ) async {
+    await open(tester);
+    expect(readingTime(tester), 'Last reading: 02:05 PM');
+    await tester.pump(const Duration(minutes: 2));
+    expect(readingTime(tester), 'Last reading: 02:05 PM');
+    final sensor = Map<String, Object?>.from(transport.getSensor!);
+    sensor['measuredAt'] = Timestamp.fromDate(DateTime(2026, 10, 17, 14, 5, 24));
+    await transport.document('Aquaponics/Ulang', sensor);
+    await tester.pumpAndSettle();
+    expect(readingTime(tester), 'Last reading: 02:05 PM');
+    expect(value(tester, WaterParameter.tds), '3852 ppm');
+
+    // Re-serving the saved document must retain the measurement time.
+    await transport.document('Aquaponics/Ulang', sensor, cached: true);
+    await tester.pumpAndSettle();
+    expect(readingTime(tester), 'Last reading: 02:05 PM');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('reading time accepts admin timestamp forms and clears missing data', (
+    tester,
+  ) async {
+    await open(tester);
+    final instant = DateTime(2026, 10, 17, 0, 6, 7);
+    for (final measuredAt in <Object>[
+      instant.toUtc().toIso8601String(),
+      {'seconds': instant.millisecondsSinceEpoch ~/ 1000},
+      instant.millisecondsSinceEpoch,
+    ]) {
+      await transport.document('Aquaponics/Ulang', {'measuredAt': measuredAt});
+      await tester.pumpAndSettle();
+      expect(readingTime(tester), 'Last reading: 12:06 AM');
+    }
+    for (final data in <Map<String, Object?>?>[
+      {'measuredAt': 'invalid'},
+      {'measuredAt': {'seconds': 'invalid'}},
+      {},
+      null,
+    ]) {
+      await transport.document('Aquaponics/Ulang', data);
+      await tester.pumpAndSettle();
+      expect(readingTime(tester), 'Last reading: --');
+    }
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
 
   testWidgets(
     'TDS and salinity show independent admin-source readings and labels',
@@ -151,6 +209,7 @@ void main() {
       final stats = Map<String, Object?>.from(sensor['statistics']! as Map);
       stats['tdsPpm'] = {'average': 4500.6};
       sensor['statistics'] = stats;
+      sensor['measuredAt'] = Timestamp.fromDate(DateTime(2026, 10, 17, 14, 6, 39));
       transport.getSensor = sensor;
       transport.getSettings = {};
       await tester
@@ -161,6 +220,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(value(tester, WaterParameter.tds), '4501 ppm');
       expect(value(tester, WaterParameter.salinity), '1.00 ppt');
+      expect(readingTime(tester), 'Last reading: 02:06 PM');
       expect(
         find.text('Dashboard refreshed with new sensor data.'),
         findsOneWidget,

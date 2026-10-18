@@ -76,6 +76,7 @@ flutter:
     - assets/img/
     - assets/fonts/
     - assets/privacy/privacy_policy.json
+    - assets/terms/terms_and_conditions.json
   #   - images/a_dot_ham.jpeg
 
   # An image asset can refer to one or more resolution-specific "variants", see
