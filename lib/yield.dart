@@ -30,9 +30,13 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
 
   late AnimationController _fadeController;
   StreamSubscription<QuerySnapshot>? _growthSub;
+  StreamSubscription<QuerySnapshot>? _mortalitySub;
+  // Cycle start the mortality listener is filtered by.
+  DateTime? _mortalityCycleStart;
 
   bool _isLoading = true;
   final _cacheStatus = CacheStatus('growth_indicators');
+  final _mortalityCache = CacheStatus('mortality_records');
   bool _isRecalculating = false;
 
   // Firestore-backed fields
@@ -41,7 +45,9 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
   DateTime? _cycleStart;
   DateTime? _cycleEnd;
   DateTime? _targetHarvestDate;
-  double _survivalRate = 0;
+  double? _initialStock;
+  double? _rfProjectedSurvival;
+  int? _deathsSinceStart; // null until mortality_records for this cycle load
   String _summaryNote = '';
   String? _errorMessage;
 
@@ -93,11 +99,22 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
     return "The RF model hasn't produced a prediction for this cycle yet";
   }
 
-  // Market price range (min/avg/max per kg) — BFAR National Consolidated
-  // Price Monitoring Report 2025, matches web/yieldPrediction.js rates.
-  static const double _priceMin = 150.0;
-  static const double _priceAvg = 300.0;
-  static const double _priceMax = 450.0;
+  // Market price range (min/avg/max per kg) — DA-BFAR NCPMR Jan 5–Feb 1 2026,
+  // M. rosenbergii, Region 3; matches web/yieldPrediction.js rates.
+  static const double _priceMin = 500.0;
+  static const double _priceAvg = 575.0;
+  static const double _priceMax = 650.0;
+
+  bool get _showsProjectedSurvival => _rfAvailable && _rfProjectedSurvival != null;
+
+  /// Projected harvest survival once the RF prediction is available, else current survival from mortality_records.
+  double? get _survivalPct {
+    if (_showsProjectedSurvival) return _rfProjectedSurvival;
+    final stock = _initialStock;
+    final deaths = _deathsSinceStart;
+    if (stock == null || stock <= 0 || deaths == null) return null;
+    return ((stock - deaths) / stock * 100).clamp(0, 100).toDouble();
+  }
 
   double? get _incomeMin =>
       _rfAvailable ? _rfProjectedYield! * _priceMin : null;
@@ -173,10 +190,12 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
               _targetHarvestDate = cycleStart?.add(
                 const Duration(days: _growoutDays),
               );
-              _survivalRate = (data['survivalRate'] as num?)?.toDouble() ?? 0;
+              _initialStock = (data['initialStock'] as num?)?.toDouble();
+              _rfProjectedSurvival = (data['rfProjectedSurvival'] as num?)?.toDouble();
               _summaryNote = (data['summaryNote'] as String?) ?? '';
               _eligible = eligible;
               _weeksRemaining = weeksRemaining;
+              _resubscribeMortality(cycleStart);
             });
             widget.onGrowthData?.call(
               _rfAvailable ? _rfProjectedYield! : 0,
@@ -196,10 +215,47 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
         );
   }
 
+  /// Restarts the mortality listener for [cycleStart] (createdAt >= cycleStart); call inside setState.
+  void _resubscribeMortality(DateTime? cycleStart) {
+    if (cycleStart == _mortalityCycleStart && (_mortalitySub != null || cycleStart == null)) return;
+    _mortalityCycleStart = cycleStart;
+    _mortalitySub?.cancel();
+    _mortalitySub = null;
+    _deathsSinceStart = null;
+    if (cycleStart == null) return;
+    _mortalitySub = FirebaseFirestore.instance
+        .collection('mortality_records')
+        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(cycleStart))
+        .snapshots(includeMetadataChanges: true)
+        .listen(
+          (snapshot) async {
+            await _mortalityCache.loaded;
+            if (!mounted || !_mortalityCache.isCurrent) return;
+            if (!_mortalityCache.canUse(snapshot.metadata)) {
+              _mortalityCache.observe(snapshot.metadata, hasData: false);
+              setState(() => _deathsSinceStart = null);
+              return;
+            }
+            _mortalityCache.observe(snapshot.metadata, hasData: snapshot.docs.isNotEmpty);
+            final deaths = snapshot.docs.fold<int>(
+              0,
+              (total, d) => total + ((d.data()['deathCount'] as num?)?.toInt() ?? 0),
+            );
+            setState(() => _deathsSinceStart = deaths);
+          },
+          onError: (error) {
+            _mortalityCache.reportError(error);
+            debugPrint('Mortality records subscription error: $error');
+          },
+        );
+  }
+
   @override
   void dispose() {
     _cacheStatus.dispose();
+    _mortalityCache.dispose();
     _growthSub?.cancel();
+    _mortalitySub?.cancel();
     _fadeController.dispose();
     super.dispose();
   }
@@ -385,8 +441,9 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
                       Row(
                         children: [
                           _buildFactorCard(
-                            "Average Weight",
-                            (_rfProjectedWeight != null &&
+                            "Projected Harvest Weight",
+                            (_rfAvailable &&
+                                    _rfProjectedWeight != null &&
                                     _rfProjectedWeight! > 0)
                                 ? "${_rfProjectedWeight!.toStringAsFixed(1)}g"
                                 : "—",
@@ -394,9 +451,11 @@ class _YieldEstimationPageState extends State<YieldEstimationPage>
                           ),
                           const SizedBox(width: 12),
                           _buildFactorCard(
-                            "Survival Rate",
-                            _survivalRate > 0
-                                ? "${_survivalRate.toStringAsFixed(0)}%"
+                            _showsProjectedSurvival
+                                ? "Projected survival at harvest"
+                                : "Current survival",
+                            _survivalPct != null
+                                ? "${_survivalPct!.toStringAsFixed(1)}%"
                                 : "—",
                             Icons.health_and_safety,
                           ),

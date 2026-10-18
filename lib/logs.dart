@@ -53,6 +53,9 @@ class _LogsPageState extends State<LogsPage>
   final _mortalityCache = CacheStatus('mortality_records');
   final _cycleCache = CacheStatus('growth_indicators');
   StreamSubscription<QuerySnapshot>? _indicatorsSub;
+  // Cycle start the growth and mortality listeners are filtered by.
+  DateTime? _recordsCycleStart;
+  bool _recordsSubscribed = false;
 
   // Weekly growth chart state
   int? _selectedWeekIndex;
@@ -97,7 +100,8 @@ class _LogsPageState extends State<LogsPage>
   static const double _sizeMin = 0.1;
   static const double _sizeMax = 50.0;
   static const double _weightMin = 0.1;
-  static const double _weightMax = 750.0;
+  static const double _weightMax = 500.0; // matches firestore.rules ulang_growth_records weight <= 500
+  static const int _deathCountMax = 100000; // matches firestore.rules mortality_records deathCount <= 100000
 
   // Plant height range
   static const double _heightMin = 0.0;
@@ -111,9 +115,24 @@ class _LogsPageState extends State<LogsPage>
       vsync: this,
     )..forward();
     _subscribeLogs();
-    _subscribeGrowthRecords();
-    _subscribeMortalityRecords();
+    // Growth and mortality listeners start from the cycle listener, filtered by cycleStart.
     _subscribeGrowthIndicators();
+  }
+
+  /// Restarts the growth and mortality listeners for [cycleStart]; call inside setState.
+  void _resubscribeCycleRecords(DateTime? cycleStart) {
+    if (_recordsSubscribed && cycleStart == _recordsCycleStart) return;
+    _recordsSubscribed = true;
+    _recordsCycleStart = cycleStart;
+    _growthRecordsSub?.cancel();
+    _mortalityRecordsSub?.cancel();
+    _growthRecordsSub = null;
+    _mortalityRecordsSub = null;
+    _ulangGrowthRecords = [];
+    _mortalityRecords = [];
+    if (cycleStart == null) return;
+    _subscribeGrowthRecords(cycleStart);
+    _subscribeMortalityRecords(cycleStart);
   }
 
   void _subscribeLogs() {
@@ -153,9 +172,10 @@ class _LogsPageState extends State<LogsPage>
         );
   }
 
-  void _subscribeGrowthRecords() {
+  void _subscribeGrowthRecords(DateTime cycleStart) {
     _growthRecordsSub = _firestore
         .collection('ulang_growth_records')
+        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(cycleStart))
         .orderBy('createdAt', descending: true)
         .snapshots(includeMetadataChanges: true)
         .listen(
@@ -177,9 +197,10 @@ class _LogsPageState extends State<LogsPage>
         );
   }
 
-  void _subscribeMortalityRecords() {
+  void _subscribeMortalityRecords(DateTime cycleStart) {
     _mortalityRecordsSub = _firestore
         .collection('mortality_records')
+        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(cycleStart))
         .orderBy('createdAt', descending: true)
         .snapshots(includeMetadataChanges: true)
         .listen(
@@ -213,7 +234,7 @@ class _LogsPageState extends State<LogsPage>
             if (!mounted || !_cacheStatus.isCurrent) return;
             if (!_cycleCache.canUse(snapshot.metadata)) {
               _cycleCache.observe(snapshot.metadata, hasData: false);
-              setState(() { _cycleStart = null; _cycleId = null; });
+              setState(() { _cycleStart = null; _cycleId = null; _resubscribeCycleRecords(null); });
               return;
             }
             _cycleCache.observe(snapshot.metadata, hasData: snapshot.docs.isNotEmpty);
@@ -223,9 +244,10 @@ class _LogsPageState extends State<LogsPage>
               setState(() {
                 _cycleStart = cycleStartTs?.toDate();
                 _cycleId = snapshot.docs.first.id;
+                _resubscribeCycleRecords(_cycleStart);
               });
             } else {
-              setState(() { _cycleStart = null; _cycleId = null; });
+              setState(() { _cycleStart = null; _cycleId = null; _resubscribeCycleRecords(null); });
             }
           },
           onError: (error) {
@@ -243,16 +265,23 @@ class _LogsPageState extends State<LogsPage>
         _showSuccessSnackbar('Showing saved data. Connect to refresh.');
         return;
       }
-      final recordsSnap = await _firestore
-          .collection('ulang_growth_records')
-          .orderBy('createdAt', descending: true)
-          .get(const GetOptions(source: Source.server)).timeout(const Duration(seconds: 10));
-
       final indicatorsSnap = await _firestore
           .collection('growth_indicators')
           .orderBy('timestamp', descending: true)
           .limit(1)
           .get(const GetOptions(source: Source.server)).timeout(const Duration(seconds: 10));
+      final refreshedStart = indicatorsSnap.docs.isEmpty
+          ? null
+          : (indicatorsSnap.docs.first.data()['cycleStart'] as Timestamp?)?.toDate();
+
+      // Only the current cycle's records; none to read without a cycle start.
+      final recordsSnap = refreshedStart == null
+          ? null
+          : await _firestore
+              .collection('ulang_growth_records')
+              .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(refreshedStart))
+              .orderBy('createdAt', descending: true)
+              .get(const GetOptions(source: Source.server)).timeout(const Duration(seconds: 10));
 
       final uid = _owner;
       final logsSnap = await _firestore
@@ -263,7 +292,8 @@ class _LogsPageState extends State<LogsPage>
 
       if (!mounted || !_cacheStatus.isCurrent) return;
       setState(() {
-        _ulangGrowthRecords = recordsSnap.docs;
+        _resubscribeCycleRecords(refreshedStart);
+        _ulangGrowthRecords = recordsSnap?.docs ?? [];
         _ulangLogs = logsSnap.docs.where((d) {
           final data = d.data() as Map<String, dynamic>;
           return data['type'] == 'ulang';
@@ -273,9 +303,7 @@ class _LogsPageState extends State<LogsPage>
           return data['type'] == 'plant';
         }).toList();
         if (indicatorsSnap.docs.isNotEmpty) {
-          final data = indicatorsSnap.docs.first.data();
-          final cycleStartTs = data['cycleStart'] as Timestamp?;
-          _cycleStart = cycleStartTs?.toDate();
+          _cycleStart = refreshedStart;
           _cycleId = indicatorsSnap.docs.first.id;
         } else {
           _cycleStart = null;
@@ -284,7 +312,9 @@ class _LogsPageState extends State<LogsPage>
         _selectedWeekIndex = null;
       });
       _cacheStatus.observe(logsSnap.metadata, hasData: logsSnap.docs.isNotEmpty);
-      _growthCache.observe(recordsSnap.metadata, hasData: recordsSnap.docs.isNotEmpty);
+      if (recordsSnap != null) {
+        _growthCache.observe(recordsSnap.metadata, hasData: recordsSnap.docs.isNotEmpty);
+      }
       _cycleCache.observe(indicatorsSnap.metadata, hasData: indicatorsSnap.docs.isNotEmpty);
       _showSuccessSnackbar("Matagumpay na na-refresh ang graph at mga tala.");
     } catch (e) {
@@ -397,9 +427,9 @@ class _LogsPageState extends State<LogsPage>
     }
 
     final deathCount = int.tryParse(deathText);
-    if (deathCount == null || deathCount < 0) {
+    if (deathCount == null || deathCount < 0 || deathCount > _deathCountMax) {
       _showErrorSnackbar(
-        "Ang bilang ng namatay ay dapat isang buong numero (0 pataas).",
+        "Ang bilang ng namatay ay dapat isang buong numero mula 0 hanggang $_deathCountMax.",
       );
       return;
     }
@@ -561,7 +591,8 @@ class _LogsPageState extends State<LogsPage>
 
     for (final doc in _ulangGrowthRecords) {
       final data = doc.data() as Map<String, dynamic>;
-      final ts = (data['observedAt'] ?? data['createdAt']) as Timestamp?;
+      // Week from createdAt only, the same as the web and predict_yield.py.
+      final ts = data['createdAt'] as Timestamp?;
       if (ts == null) continue;
       final date = ts.toDate();
       if (date.isBefore(cycleStart)) continue;
@@ -579,9 +610,8 @@ class _LogsPageState extends State<LogsPage>
 
     return sortedWeekNumbers.map((weekNum) {
       final records = weekBuckets[weekNum]!;
-      final double totalWeight = records.fold(0.0, (acc, r) => acc + r.weight);
       final int count = records.length;
-      final double avgWeight = count > 0 ? (totalWeight / count) : 0.0;
+      final double medianWeight = _median(records.map((r) => r.weight).toList());
 
       final weekStart = cycleStart.add(Duration(days: (weekNum - 1) * 7));
       final weekEnd = weekStart.add(const Duration(days: 6));
@@ -597,13 +627,19 @@ class _LogsPageState extends State<LogsPage>
         'weekNumber': weekNum,
         'label': 'W$weekNum',
         'longLabel': 'Linggo $weekNum',
-        'avgWeight': avgWeight,
-        'totalWeight': totalWeight,
+        'medianWeight': medianWeight,
         'count': count,
         'dateRange': _formatDateRange(weekStart, weekEnd),
         'latestObservation': latestDate,
       };
     }).toList();
+  }
+
+  /// Median of non-empty [values]; an even count averages the two middle values, like web reportCleanup.js median.
+  static double _median(List<double> values) {
+    final sorted = [...values]..sort();
+    final mid = sorted.length ~/ 2;
+    return sorted.length.isOdd ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
   }
 
   String _formatShortDate(DateTime date) {
@@ -1267,7 +1303,7 @@ class _LogsPageState extends State<LogsPage>
                         overflow: TextOverflow.ellipsis,
                       ),
                       Text(
-                        "${selectedWeek['count']} ${selectedWeek['count'] == 1 ? 'tala' : 'mga tala'} • Ave: ${(selectedWeek['avgWeight'] as double).toStringAsFixed(1)} g",
+                        "Median • n = ${selectedWeek['count']} ${selectedWeek['count'] == 1 ? 'tala' : 'mga tala'}",
                         style: GoogleFonts.poppins(
                           fontSize: 11,
                           color: textMuted,
@@ -1277,7 +1313,7 @@ class _LogsPageState extends State<LogsPage>
                   ),
                 ),
                 Text(
-                  "${(selectedWeek['totalWeight'] as double).toStringAsFixed(1)} g",
+                  "${(selectedWeek['medianWeight'] as double).toStringAsFixed(1)} g",
                   style: GoogleFonts.poppins(
                     fontSize: 16,
                     fontWeight: FontWeight.w800,
@@ -1925,10 +1961,10 @@ class WeeklyGrowthLinePainter extends CustomPainter {
     final double chartHeight = size.height - topPad - bottomPad;
     final double chartBottom = topPad + chartHeight;
 
-    // Calculate max weight for Y-axis scale
+    // Calculate max weekly median for Y-axis scale
     double maxVal = 0.0;
     for (final d in data) {
-      final w = (d['totalWeight'] as num).toDouble();
+      final w = (d['medianWeight'] as num).toDouble();
       if (w > maxVal) maxVal = w;
     }
 
@@ -1960,14 +1996,14 @@ class WeeklyGrowthLinePainter extends CustomPainter {
     final List<Offset> points = [];
     if (data.length == 1) {
       final double x = leftPad + (chartWidth / 2);
-      final double weight = (data[0]['totalWeight'] as num).toDouble();
+      final double weight = (data[0]['medianWeight'] as num).toDouble();
       final double y = chartBottom - ((weight / maxY) * chartHeight).clamp(0.0, chartHeight);
       points.add(Offset(x, y));
     } else {
       final double step = chartWidth / (data.length - 1);
       for (int i = 0; i < data.length; i++) {
         final double x = leftPad + (i * step);
-        final double weight = (data[i]['totalWeight'] as num).toDouble();
+        final double weight = (data[i]['medianWeight'] as num).toDouble();
         final double y = chartBottom - ((weight / maxY) * chartHeight).clamp(0.0, chartHeight);
         points.add(Offset(x, y));
       }
@@ -2029,8 +2065,8 @@ class WeeklyGrowthLinePainter extends CustomPainter {
         canvas.drawCircle(p, 4.5, Paint()..color = tealDarkColor);
 
         // Value text bubble above node
-        final double total = (data[i]['totalWeight'] as num).toDouble();
-        _drawValueBubble(canvas, "${total.toStringAsFixed(1)}g", Offset(p.dx, p.dy - 12));
+        final double median = (data[i]['medianWeight'] as num).toDouble();
+        _drawValueBubble(canvas, "${median.toStringAsFixed(1)}g", Offset(p.dx, p.dy - 12));
       } else {
         // Inactive standard node
         canvas.drawCircle(p, 5, Paint()..color = Colors.white);

@@ -323,7 +323,7 @@ void main() {
     await close(tester);
   });
   testWidgets(
-    'growth graph includes only observations in the current admin cycle',
+    'growth graph includes only records created in the current admin cycle, as weekly medians',
     (tester) async {
       final start = DateTime(2026, 10, 1, 12, 30);
       final nextWeek = start.add(const Duration(days: 7));
@@ -388,13 +388,14 @@ void main() {
         return (chart.painter! as WeeklyGrowthLinePainter).data;
       }
 
+      // Weeks follow createdAt (like the web), so the two createdAt >= start records with an older observedAt count.
       final weeks = plottedWeeks();
       expect(weeks.map((week) => week['weekNumber']), [1, 2]);
-      expect(weeks.first['count'], 3);
-      expect(weeks.first['totalWeight'], 60.0);
-      expect(weeks.first['avgWeight'], 20.0);
+      expect(weeks.first['count'], 5);
+      expect(weeks.first['medianWeight'], 30.0);
+      expect(weeks.first.containsKey('totalWeight'), isFalse);
       expect(weeks.last['count'], 1);
-      expect(weeks.last['totalWeight'], 40.0);
+      expect(weeks.last['medianWeight'], 40.0);
       expect(weeks.last['latestObservation'], nextWeek);
 
       await tester.runAsync(
@@ -406,7 +407,7 @@ void main() {
       final remaining = plottedWeeks().single;
       expect(remaining['weekNumber'], 1);
       expect(remaining['count'], 1);
-      expect(remaining['totalWeight'], 40.0);
+      expect(remaining['medianWeight'], 40.0);
       await tester.runAsync(() async {
         for (final entry in records.entries) {
           expect(
@@ -559,7 +560,7 @@ void main() {
   );
   for (final noDocument in [false, true]) {
     testWidgets(
-      'mortality recorded week is unavailable without admin start (no document: $noDocument)',
+      'mortality records are not listed without admin start (no document: $noDocument)',
       (tester) async {
         if (noDocument) {
           await firestore.doc('growth_indicators/cycle').delete();
@@ -574,14 +575,15 @@ void main() {
           'weekNumber': 99,
         });
         await openForm(tester, OperationKind.mortality);
-        expect(find.text('Linggo ng cycle: Hindi available'), findsOneWidget);
+        // The listener is filtered by cycleStart, so with no cycle nothing is read or listed.
+        expect(find.textContaining('Linggo ng cycle'), findsNothing);
         expect(find.text('Linggo: 99'), findsNothing);
         await close(tester);
       },
     );
   }
   testWidgets(
-    'mortality recorded before the admin cycle is not assigned week one',
+    'mortality created before the admin cycle is not listed',
     (tester) async {
       final start = DateTime(2026, 10, 1);
       await firestore.doc('growth_indicators/cycle').update({
@@ -599,13 +601,14 @@ void main() {
         });
       }
       await openForm(tester, OperationKind.mortality);
-      expect(find.text('Bago ang kasalukuyang cycle'), findsNWidgets(2));
+      // createdAt >= cycleStart query: only the at-start record is read.
+      expect(find.text('Bago ang kasalukuyang cycle'), findsNothing);
       expect(find.text('Linggo ng cycle: 1'), findsOneWidget);
       await close(tester);
     },
   );
   testWidgets(
-    'mortality recorded week is unknown without a recording timestamp',
+    'mortality without a recording timestamp is not listed',
     (tester) async {
       await firestore.doc('mortality_records/undated').set({
         'createdAt': null,
@@ -613,10 +616,8 @@ void main() {
         'weekNumber': 99,
       });
       await openForm(tester, OperationKind.mortality);
-      expect(
-        find.text('Linggo ng cycle: Hindi matukoy ang petsa'),
-        findsOneWidget,
-      );
+      // A null createdAt never matches the createdAt >= cycleStart range filter.
+      expect(find.textContaining('Linggo ng cycle'), findsNothing);
       expect(find.text('Linggo: 99'), findsNothing);
       await close(tester);
     },

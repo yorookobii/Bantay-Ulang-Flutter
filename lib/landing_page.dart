@@ -298,14 +298,11 @@ class _DashboardPageState extends State<DashboardPage>
             if (!usable) return;
             if (snapshot.docs.isEmpty) return;
             final data = snapshot.docs.first.data() as Map<String, dynamic>;
-            final rfYield = (data['rfProjectedYield'] as num?)?.toDouble() ??
-                (data['expectedYield'] as num?)?.toDouble();
+            final rfYield = _gatedYield(data);
             final sHealth = (data['shrimpHealth'] as String?) ?? 'Malusog';
             final pHealth = (data['plantHealth'] as String?) ?? 'Maayos';
             setState(() {
-              if (rfYield != null && rfYield > 0) {
-                _expectedYield = rfYield;
-              }
+              _expectedYield = rfYield;
               _shrimpHealth = sHealth;
               _plantHealth = pHealth;
             });
@@ -414,12 +411,7 @@ class _DashboardPageState extends State<DashboardPage>
         _pendingTasks = pendingTasks;
 
         if (growthData != null) {
-          final rfYield =
-              (growthData['rfProjectedYield'] as num?)?.toDouble() ??
-              (growthData['expectedYield'] as num?)?.toDouble();
-          if (rfYield != null && rfYield > 0) {
-            _expectedYield = rfYield;
-          }
+          _expectedYield = _gatedYield(growthData);
           _shrimpHealth =
               (growthData['shrimpHealth'] as String?) ?? 'Malusog';
           _plantHealth = (growthData['plantHealth'] as String?) ?? 'Maayos';
@@ -604,6 +596,15 @@ class _DashboardPageState extends State<DashboardPage>
     setState(() => _seenNotificationKeys.add(key));
     unawaited(NotificationService.instance.markNotificationsSeen([key]));
     unawaited(NotificationService.instance.cancelNotification(key));
+  }
+
+  /// rfProjectedYield from day 90 of the cycle (same gate as yield.dart), else 0 so the card shows Pending.
+  static double _gatedYield(Map<String, dynamic> data) {
+    final start = (data['cycleStart'] as Timestamp?)?.toDate();
+    final rfYield = (data['rfProjectedYield'] as num?)?.toDouble();
+    if (start == null || rfYield == null || rfYield <= 0) return 0;
+    final daysSince = DateTime.now().difference(start).inMilliseconds / 86400000;
+    return daysSince >= 90 ? rfYield : 0;
   }
 
   String get _yieldDisplay {
