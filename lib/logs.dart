@@ -441,6 +441,7 @@ class _LogsPageState extends State<LogsPage>
       return;
     }
     final observedAt = DateTime.now();
+    // Informational save-time snapshot (rules require it); displays derive the week from createdAt vs the current cycle start.
     final weekNumber = _weekNumberFor(observedAt, cycleStart);
     if (weekNumber < 1) {
       _showErrorSnackbar('The farming cycle has not started yet.');
@@ -1705,6 +1706,8 @@ class _LogsPageState extends State<LogsPage>
     final deathCount = data['deathCount'] ?? 0;
     final ts = (data['observedAt'] ?? data['createdAt']) as Timestamp?;
     final date = ts?.toDate();
+    // Cycle week from createdAt vs the current cycle start, same as the web and predict_yield.py.
+    final createdAt = (data['createdAt'] as Timestamp?)?.toDate();
     final formattedDate = date != null
         ? '${date.month}/${date.day}/${date.year}'
         : '—';
@@ -1756,7 +1759,7 @@ class _LogsPageState extends State<LogsPage>
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  _mortalityCycleWeekLabel(date),
+                  _mortalityCycleWeekLabel(createdAt),
                   style: GoogleFonts.poppins(fontSize: 13, color: textMuted),
                 ),
               ],

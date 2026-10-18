@@ -524,7 +524,7 @@ void main() {
     },
   );
   testWidgets(
-    'mortality recorded weeks honor exact boundaries and observation timestamp priority',
+    'mortality recorded weeks follow createdAt at exact boundaries, not observedAt or stored weekNumber',
     (tester) async {
       final start = DateTime(2026, 10, 1);
       final boundary = start.add(const Duration(days: 7));
@@ -532,21 +532,21 @@ void main() {
         'cycleStart': Timestamp.fromDate(start),
       });
       await firestore.doc('mortality_records/before-boundary').set({
-        'createdAt': Timestamp.fromDate(start.add(const Duration(days: 9))),
-        'observedAt': Timestamp.fromDate(
+        'createdAt': Timestamp.fromDate(
           boundary.subtract(const Duration(microseconds: 1)),
         ),
         'deathCount': 1,
         'weekNumber': 42,
       });
       await firestore.doc('mortality_records/at-boundary').set({
-        'createdAt': Timestamp.fromDate(start.add(const Duration(days: 14))),
-        'observedAt': Timestamp.fromDate(boundary.toUtc()),
+        'createdAt': Timestamp.fromDate(boundary.toUtc()),
         'deathCount': 1,
         'weekNumber': 42,
       });
-      await firestore.doc('mortality_records/legacy-created-time').set({
+      // createdAt (week 3) wins over an earlier observedAt (week 1).
+      await firestore.doc('mortality_records/created-wins').set({
         'createdAt': Timestamp.fromDate(start.add(const Duration(days: 14))),
+        'observedAt': Timestamp.fromDate(start),
         'deathCount': 1,
         'weekNumber': 42,
       });
