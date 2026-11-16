@@ -56,7 +56,7 @@ void main() {
       expect(content, contains('AlwaysScrollableScrollPhysics()'));
     });
 
-    test('refresh message matches the Logs success message styling', () {
+    test('refresh and Logs messages share layout with distinct backgrounds', () {
       final dashboard = File('lib/landing_page.dart').readAsStringSync();
       final logs = File('lib/logs.dart').readAsStringSync();
       final dashboardStyle = dashboard.substring(
@@ -77,7 +77,7 @@ void main() {
         expect(style, isNot(contains('padding:')));
       }
       expect(dashboardStyle, contains('isError ? warningRed : tealDark'));
-      expect(logsStyle, contains('backgroundColor: tealDark'));
+      expect(logsStyle, contains('backgroundColor: const Color(0xFFDCFCE7)'));
     });
 
     testWidgets('pulling down triggers the refresh callback', (tester) async {

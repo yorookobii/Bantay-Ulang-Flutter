@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:demo_1_langto/tasks.dart';
+import 'package:demo_1_langto/logs.dart';
 import 'package:demo_1_langto/notification_service.dart';
 import 'package:demo_1_langto/offline/offline_services.dart';
 import 'package:demo_1_langto/offline/offline_store.dart';
@@ -82,10 +83,14 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Future<void> open(WidgetTester tester) async {
+  Future<void> open(WidgetTester tester, {VoidCallback? onOpenLogs}) async {
     await tester.binding.setSurfaceSize(const Size(900, 1500));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(MaterialApp(home: TasksPage(firestore: db)));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TasksPage(firestore: db, onOpenLogs: onOpenLogs),
+      ),
+    );
     await settle(tester);
   }
 
@@ -94,6 +99,107 @@ void main() {
     await tester.tap(find.text('Tapusin'));
     await settle(tester);
   }
+
+  for (final title in ['Ulang Data Capture', '  ULANG DATA CAPTURE  ']) {
+    testWidgets('tapping "$title" opens Logs without completing the task', (
+      tester,
+    ) async {
+      await db.doc('tasks/task').update({'title': title});
+      await db.doc('tasks/other-user').set({
+        'assignedTo': 'farmer-b',
+        'status': 'pending',
+        'title': 'Other user capture task',
+        'createdAt': Timestamp.now(),
+      });
+      await db.doc('tasks/completed').set({
+        'assignedTo': 'farmer-a',
+        'status': 'done',
+        'title': 'Completed capture task',
+        'createdAt': Timestamp.now(),
+      });
+      var openLogsCalls = 0;
+      await open(tester, onOpenLogs: () => openLogsCalls++);
+      expect(find.text('Other user capture task'), findsNothing);
+      expect(find.text('Completed capture task'), findsNothing);
+
+      await tester.tap(find.text(title));
+      await settle(tester);
+
+      expect(openLogsCalls, 1);
+      expect(db.transactionCalls, 0);
+      expect(find.text('Tapusin'), findsOneWidget);
+      await tester.runAsync(() async {
+        expect((await db.doc('tasks/task').get()).data()!['status'], 'pending');
+      });
+      await close(tester);
+    });
+  }
+
+  testWidgets('standalone capture task opens Logs and Back returns to Tasks', (
+    tester,
+  ) async {
+    await db.doc('tasks/task').update({'title': 'Ulang Data Capture'});
+    services.session.networkLost();
+    await open(tester);
+
+    await tester.tap(find.text('Ulang Data Capture'));
+    await settle(tester);
+    expect(find.byType(LogsPage), findsOneWidget);
+    expect(find.byType(BackButton).hitTestable(), findsOneWidget);
+    expect(db.transactionCalls, 0);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.byType(BackButton).hitTestable());
+    await settle(tester);
+    expect(find.byType(LogsPage), findsNothing);
+    expect(find.text('Ulang Data Capture'), findsOneWidget);
+    expect(find.text('Tapusin'), findsOneWidget);
+    await tester.runAsync(() async {
+      expect((await db.doc('tasks/task').get()).data()!['status'], 'pending');
+    });
+    await close(tester);
+  });
+
+  testWidgets(
+    'other tasks do not open Logs even if description mentions capture',
+    (tester) async {
+      await db.doc('tasks/task').update({'description': 'Ulang Data Capture'});
+      var openLogsCalls = 0;
+      await open(tester, onOpenLogs: () => openLogsCalls++);
+
+      await tester.tap(find.text('Check water'));
+      await settle(tester);
+      expect(openLogsCalls, 0);
+      expect(find.byType(LogsPage), findsNothing);
+      expect(db.transactionCalls, 0);
+      await close(tester);
+    },
+  );
+
+  testWidgets('capture completion button completes without opening Logs', (
+    tester,
+  ) async {
+    await db.doc('tasks/task').update({'title': 'Ulang Data Capture'});
+    db.gate = Completer<void>();
+    var openLogsCalls = 0;
+    await open(tester, onOpenLogs: () => openLogsCalls++);
+
+    await complete(tester);
+    await tester.tap(find.text('Ulang Data Capture'));
+    await tester.pump();
+    expect(find.text('Saving...'), findsOneWidget);
+    expect(openLogsCalls, 0);
+    expect(db.transactionCalls, 1);
+
+    db.gate!.complete();
+    await settle(tester);
+    expect(find.text('Ulang Data Capture'), findsNothing);
+    expect(openLogsCalls, 0);
+    await tester.runAsync(() async {
+      expect((await db.doc('tasks/task').get()).data()!['status'], 'done');
+    });
+    await close(tester);
+  });
 
   testWidgets(
     'offline task completion keeps task actionable and creates no queue',

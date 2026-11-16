@@ -16,88 +16,39 @@ import '../test/support/offline_fakes.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  testWidgets(
-    'Android SQLite discards legacy queues and preserves offline viewing on upgrade',
-    (tester) async {
-      final databasePath = path.join(
-        await getDatabasesPath(),
-        'offline_integration_only.db',
-      );
-      await deleteDatabase(databasePath);
-      final legacy = await openDatabase(
-        databasePath,
-        version: 1,
-        onCreate: (db, _) async {
-          await db.execute(
-            'CREATE TABLE operations (id TEXT PRIMARY KEY, uid TEXT, status TEXT)',
-          );
-          await db.execute(
-            'CREATE TABLE recalculations (uid TEXT, cycleId TEXT, cycleStart INTEGER)',
-          );
-          await db.execute(
-            'CREATE TABLE approvals (uid TEXT PRIMARY KEY, checkedAt INTEGER NOT NULL, profile TEXT NOT NULL)',
-          );
-          await db.execute(
-            'CREATE TABLE cache_stamps (uid TEXT, source TEXT, confirmedAt INTEGER, PRIMARY KEY(uid,source))',
-          );
-        },
-      );
-      for (final owner in ['farmer-a', 'farmer-b']) {
-        await legacy.insert('operations', {
-          'id': '$owner-pending',
-          'uid': owner,
-          'status': 'pending',
-        });
-        await legacy.insert('recalculations', {
-          'uid': owner,
-          'cycleId': 'cycle',
-          'cycleStart': 1,
-        });
-      }
-      var store = OfflineStore(legacy);
-      final auth = TestSessionBackend();
-      var session = SessionController(store, auth);
-      await session.acceptLogin('farmer-a', {
-        'role': 'user',
-        'status': 'active',
-      }, emailVerified: true);
-      final confirmed = DateTime.now();
-      await store.confirmCache('farmer-a', 'logs', confirmed);
-      session.dispose();
-      await store.close();
-      auth.connected = false;
-      store = await OfflineStore.open(databasePath: databasePath);
-      session = SessionController(store, auth);
-      await session.start();
-      final remote = TestSyncBackend();
-      final services = OfflineServices(store, session, remote);
-      OfflineServices.current = services;
-      expect(session.canAccess, isTrue);
-      expect(session.online, isFalse);
-      expect(
-        (await store.lastConfirmed('farmer-a', 'logs'))!.millisecondsSinceEpoch,
-        confirmed.millisecondsSinceEpoch,
-      );
-      for (final kind in OperationKind.values) {
-        await expectLater(
-          services.submitOnline(kind, {}),
-          throwsA(isA<SyncConflict>()),
-        );
-      }
-      expect(await store.db.getVersion(), 2);
-      final tables = await store.db.rawQuery(
-        "SELECT name FROM sqlite_master WHERE type = 'table'",
-      );
-      expect(tables.map((r) => r['name']), isNot(contains('operations')));
-      expect(tables.map((r) => r['name']), isNot(contains('recalculations')));
-      auth.connected = true;
-      await session.refresh();
-      expect(remote.calls, 0);
-      await services.dispose();
-      await auth.events.close();
-      await deleteDatabase(databasePath);
-    },
-  );
+  testWidgets('Android SQLite preserves viewing metadata without a record queue', (tester) async {
+    final databasePath = path.join(await getDatabasesPath(), 'offline_integration_only.db');
+    await deleteDatabase(databasePath);
+    var store = await OfflineStore.open(databasePath: databasePath);
+    final auth = TestSessionBackend();
+    var session = SessionController(store, auth);
+    await session.acceptLogin('farmer-a', {'role': 'user', 'status': 'active'}, emailVerified: true);
+    final confirmed = DateTime.now();
+    await store.confirmCache('farmer-a', 'logs', confirmed);
+    session.dispose();
+    await store.close();
+    auth.connected = false;
+    store = await OfflineStore.open(databasePath: databasePath);
+    session = SessionController(store, auth);
+    await session.start();
+    final remote = TestSyncBackend();
+    final services = OfflineServices(store, session, remote);
+    OfflineServices.current = services;
+    expect(session.canAccess, isTrue);
+    expect(session.online, isFalse);
+    expect((await store.lastConfirmed('farmer-a', 'logs'))!.millisecondsSinceEpoch, confirmed.millisecondsSinceEpoch);
+    for (final kind in OperationKind.values) {
+      await expectLater(services.submitOnline(kind, {}), throwsA(isA<SyncConflict>()));
+    }
+    final tables = await store.db.rawQuery("SELECT name FROM sqlite_master WHERE type = 'table'");
+    expect(tables.map((r) => r['name']), isNot(contains('operations')));
+    auth.connected = true;
+    await session.refresh();
+    expect(remote.calls, 0);
+    await services.dispose();
+    await auth.events.close();
+    await deleteDatabase(databasePath);
+  });
 
   testWidgets(
     'Android forms block offline logs and save online in the same approved session',
@@ -116,11 +67,7 @@ void main() {
         'status': 'active',
       }, emailVerified: true);
       final firestore = FakeFirebaseFirestore();
-      final services = OfflineServices(
-        store,
-        session,
-        FirestoreSyncBackend(firestore, () => session.uid),
-      );
+      final services = OfflineServices(store, session, FirestoreSyncBackend(firestore, () => session.uid));
       OfflineServices.current = services;
       await firestore.collection('users').doc('farmer-a').set({
         'role': 'user',

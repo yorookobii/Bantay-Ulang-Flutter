@@ -668,17 +668,20 @@ class _LogsPageState extends State<LogsPage>
       SnackBar(
         content: Row(
           children: [
-            const Icon(Icons.check_circle, color: Colors.white),
+            const Icon(Icons.check_circle, color: Color(0xFF15803D)),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
                 message,
-                style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
+                style: GoogleFonts.poppins(
+                  color: const Color(0xFF14532D),
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ),
           ],
         ),
-        backgroundColor: tealDark,
+        backgroundColor: const Color(0xFFDCFCE7),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         margin: const EdgeInsets.all(16),

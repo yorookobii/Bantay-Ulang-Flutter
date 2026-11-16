@@ -8,11 +8,12 @@ import 'offline/offline_services.dart';
 import 'offline/offline_widgets.dart';
 import 'offline/offline_models.dart';
 import 'offline/session_controller.dart';
-// logs import removed — task cards no longer navigate to LogsPage;
+import 'logs.dart';
 
 class TasksPage extends StatefulWidget {
-  const TasksPage({super.key, this.firestore});
+  const TasksPage({super.key, this.firestore, this.onOpenLogs});
   final FirebaseFirestore? firestore;
+  final VoidCallback? onOpenLogs;
 
   @override
   State<TasksPage> createState() => _TasksPageState();
@@ -151,17 +152,20 @@ class _TasksPageState extends State<TasksPage>
         SnackBar(
           content: Row(
             children: [
-              const Icon(Icons.check_circle, color: Colors.white),
+              const Icon(Icons.check_circle, color: Color(0xFF15803D)),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   message,
-                  style: GoogleFonts.poppins(fontWeight: FontWeight.w500),
+                  style: GoogleFonts.poppins(
+                    color: const Color(0xFF14532D),
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
             ],
           ),
-          backgroundColor: tealDark,
+          backgroundColor: const Color(0xFFDCFCE7),
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(10),
@@ -169,6 +173,22 @@ class _TasksPageState extends State<TasksPage>
           margin: const EdgeInsets.all(16),
         ),
       );
+  }
+
+  void _openLogs() {
+    if (!_cacheStatus.isCurrent) return;
+    if (widget.onOpenLogs != null) {
+      widget.onOpenLogs!();
+      return;
+    }
+    Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: const Text('Logs')),
+          body: LogsPage(firestore: widget.firestore),
+        ),
+      ),
+    );
   }
 
   Color _statusColor(String status) {
@@ -344,6 +364,8 @@ class _TasksPageState extends State<TasksPage>
     final Timestamp? createdAt = data['createdAt'] as Timestamp?;
     final bool isDone = status == 'done';
     final bool isCompleting = _completingTaskIds.contains(docId);
+    final bool isUlangDataCapture =
+        title.trim().toLowerCase() == 'ulang data capture';
 
     return Container(
       decoration: BoxDecoration(
@@ -362,7 +384,9 @@ class _TasksPageState extends State<TasksPage>
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(16),
         child: InkWell(
-          onTap: null,
+          onTap: isUlangDataCapture && !isDone && !isCompleting
+              ? _openLogs
+              : null,
           borderRadius: BorderRadius.circular(16),
           child: Padding(
             padding: const EdgeInsets.all(20),

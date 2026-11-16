@@ -763,7 +763,7 @@ class _DashboardPageState extends State<DashboardPage>
                   index: _currentNavIndex,
                   children: [
                     _buildDashboardView(),
-                    const TasksPage(),
+                    TasksPage(onOpenLogs: () => _onNavTapped(3)),
                     YieldEstimationPage(
                       onGrowthData: (expectedYield, shrimpHealth, plantHealth) {
                         if (!mounted || !_cacheStatus.isCurrent) return;
@@ -1546,7 +1546,7 @@ class _DashboardPageState extends State<DashboardPage>
                           overflow: TextOverflow.ellipsis,
                         ),
                         Text(
-                          "Thai Oregano ",
+                          "Mint",
                           style: GoogleFonts.poppins(
                             fontSize: 9.5,
                             fontWeight: FontWeight.w500,
