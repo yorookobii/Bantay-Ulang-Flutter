@@ -85,24 +85,30 @@ void main() {
       .widget<Text>(find.byKey(const Key('dashboard_reading_time')))
       .data;
 
-  testWidgets('reading time follows measuredAt, even with unchanged values', (
+  testWidgets('reading date and time follow measuredAt, even with unchanged values', (
     tester,
   ) async {
     await open(tester);
-    expect(readingTime(tester), 'Last reading: 02:05 PM');
+    expect(readingTime(tester), 'Last reading: 2026-10-17 at 02:05 PM');
     await tester.pump(const Duration(minutes: 2));
-    expect(readingTime(tester), 'Last reading: 02:05 PM');
+    expect(readingTime(tester), 'Last reading: 2026-10-17 at 02:05 PM');
     final sensor = Map<String, Object?>.from(transport.getSensor!);
     sensor['measuredAt'] = Timestamp.fromDate(DateTime(2026, 10, 17, 14, 5, 24));
     await transport.document('Aquaponics/Ulang', sensor);
     await tester.pumpAndSettle();
-    expect(readingTime(tester), 'Last reading: 02:05 PM');
+    expect(readingTime(tester), 'Last reading: 2026-10-17 at 02:05 PM');
     expect(value(tester, WaterParameter.tds), '3852 ppm');
 
     // Re-serving the saved document must retain the measurement time.
     await transport.document('Aquaponics/Ulang', sensor, cached: true);
     await tester.pumpAndSettle();
-    expect(readingTime(tester), 'Last reading: 02:05 PM');
+    expect(readingTime(tester), 'Last reading: 2026-10-17 at 02:05 PM');
+
+    // The same clock time on another date must show the new measurement date.
+    sensor['measuredAt'] = Timestamp.fromDate(DateTime(2026, 10, 18, 14, 5));
+    await transport.document('Aquaponics/Ulang', sensor);
+    await tester.pumpAndSettle();
+    expect(readingTime(tester), 'Last reading: 2026-10-18 at 02:05 PM');
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
@@ -120,7 +126,7 @@ void main() {
     ]) {
       await transport.document('Aquaponics/Ulang', {'measuredAt': measuredAt});
       await tester.pumpAndSettle();
-      expect(readingTime(tester), 'Last reading: 12:06 AM');
+      expect(readingTime(tester), 'Last reading: 2026-10-17 at 12:06 AM');
     }
     for (final data in <Map<String, Object?>?>[
       {'measuredAt': 'invalid'},
@@ -220,7 +226,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(value(tester, WaterParameter.tds), '4501 ppm');
       expect(value(tester, WaterParameter.salinity), '1.00 ppt');
-      expect(readingTime(tester), 'Last reading: 02:06 PM');
+      expect(readingTime(tester), 'Last reading: 2026-10-17 at 02:06 PM');
       expect(
         find.text('Dashboard refreshed with new sensor data.'),
         findsOneWidget,

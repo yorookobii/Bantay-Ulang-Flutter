@@ -203,7 +203,10 @@ class _DashboardPageState extends State<DashboardPage>
     final hour = measuredAt.hour % 12 == 0 ? 12 : measuredAt.hour % 12;
     final minute = measuredAt.minute.toString().padLeft(2, '0');
     final period = measuredAt.hour < 12 ? 'AM' : 'PM';
-    return '${hour.toString().padLeft(2, '0')}:$minute $period';
+    final year = measuredAt.year.toString().padLeft(4, '0');
+    final month = measuredAt.month.toString().padLeft(2, '0');
+    final day = measuredAt.day.toString().padLeft(2, '0');
+    return '$year-$month-$day at ${hour.toString().padLeft(2, '0')}:$minute $period';
   }
 
   void _subscribeAlerts() {

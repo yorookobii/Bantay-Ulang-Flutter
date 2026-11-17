@@ -552,7 +552,7 @@ class _SignupPageState extends State<SignupPage> {
       case 'email-already-in-use':
         return 'An account already uses this email. Try logging in.';
       case 'weak-password':
-        return 'Choose a stronger password with at least 8 characters.';
+        return newPasswordRequirements;
       case 'invalid-email':
         return 'Enter a valid email address.';
       case 'too-many-requests':
@@ -707,11 +707,6 @@ class _SignupPageState extends State<SignupPage> {
                     : (_isSignIn ? (_) => _submit() : null),
               ),
               if (!_isSignIn) ...[
-                const SizedBox(height: 7),
-                Text(
-                  'Use at least 8 characters.',
-                  style: GoogleFonts.poppins(fontSize: 12, color: _textMuted),
-                ),
                 const SizedBox(height: 22),
                 _buildPasswordField(
                   controller: _confirmPasswordController,
@@ -959,11 +954,15 @@ class _SignupPageState extends State<SignupPage> {
             validator: validator,
             enabled: !_isLoading,
             obscureText: !visible,
+            autovalidateMode: !_isSignIn && label == 'Password'
+                ? AutovalidateMode.onUserInteraction
+                : AutovalidateMode.disabled,
             autofillHints: [autofillHint],
             textInputAction: textInputAction,
             onFieldSubmitted: onFieldSubmitted,
             style: GoogleFonts.poppins(fontSize: 15, color: _textDark),
             decoration: _inputDecoration(label, Icons.lock_outline).copyWith(
+              errorMaxLines: 6,
               suffixIcon: IconButton(
                 tooltip: visible
                     ? 'Hide password'
