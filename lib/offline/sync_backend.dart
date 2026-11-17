@@ -190,6 +190,7 @@ class FirestoreSyncBackend implements SyncBackend {
         case OperationKind.mortality:
           tx.set(death!, {
             'deathCount': p['deathCount'],
+            // Informational snapshot (required by rules); readers derive the week from createdAt.
             'weekNumber': p['weekNumber'],
             'recordedBy': op.uid,
             'createdAt': FieldValue.serverTimestamp(),
@@ -275,17 +276,12 @@ class FirestoreSyncBackend implements SyncBackend {
             ),
           )
           .get(server);
-      final total = records.docs
-          .where((d) {
-            final observed = d.data()['observedAt'] as Timestamp?;
-            return observed == null ||
-                observed.millisecondsSinceEpoch >= cycleStart;
-          })
-          .fold<int>(
-            0,
-            (deaths, d) =>
-                deaths + ((d.data()['deathCount'] as num?)?.toInt() ?? 0),
-          );
+      // createdAt-only (the query bound), matching the web and predict_yield.py totals.
+      final total = records.docs.fold<int>(
+        0,
+        (deaths, d) =>
+            deaths + ((d.data()['deathCount'] as num?)?.toInt() ?? 0),
+      );
       final stock = (data?['initialStock'] as num?)?.toDouble() ?? 0;
       if (currentUid() != owner || canSubmit?.call() == false) {
         throw const SyncConflict('The session changed.');

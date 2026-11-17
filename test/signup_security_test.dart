@@ -64,14 +64,17 @@ void main() {
     await finish(tester);
   }
 
-  Future<void> register(WidgetTester tester) async {
+  Future<void> register(
+    WidgetTester tester, {
+    String password = 'River garden 739!',
+  }) async {
     await tester.tap(find.text('Create an Account').first);
     await tester.pump();
     final fields = find.byType(TextFormField);
     await tester.enterText(fields.at(0), 'Farm User');
     await tester.enterText(fields.at(1), 'user@example.com');
-    await tester.enterText(fields.at(2), 'River garden 739!');
-    await tester.enterText(fields.at(3), 'River garden 739!');
+    await tester.enterText(fields.at(2), password);
+    await tester.enterText(fields.at(3), password);
     await tester.tap(find.widgetWithText(ElevatedButton, 'Create an Account'));
     await finish(tester);
   }
@@ -81,6 +84,67 @@ void main() {
     expect(auth.signOutCalls, 1);
     expect(find.text('Protected dashboard'), findsNothing);
   }
+
+  const invalidPasswords = {
+    'River73': '\u2022 Use at least 8 characters.',
+    'river739': '\u2022 Include one uppercase letter.',
+    'Riverbed': '\u2022 Include one number.',
+    '73918264': '\u2022 Include one uppercase letter.',
+  };
+  for (final entry in invalidPasswords.entries) {
+    final password = entry.key;
+    testWidgets('signup blocks noncompliant password: $password', (tester) async {
+      await showAuth(tester);
+      await register(tester, password: password);
+      expect(find.text(entry.value), findsOneWidget);
+      expect(auth.createCalls, 0);
+      expect(profile.readCalls, 0);
+      expect(profile.updates, isEmpty);
+      expect(auth.currentUser, isNull);
+    });
+  }
+
+  testWidgets('password requirements appear only when unmet and update while typing', (
+    tester,
+  ) async {
+    await showAuth(tester);
+    await tester.tap(find.text('Create an Account').first);
+    await tester.pump();
+    expect(find.textContaining('Use at least 8 characters'), findsNothing);
+    expect(find.textContaining('Include one uppercase letter'), findsNothing);
+    expect(find.textContaining('Include one number'), findsNothing);
+
+    final password = find.byType(TextFormField).at(2);
+    await tester.enterText(password, 'river');
+    await tester.pump();
+    expect(
+      find.text('\u2022 Use at least 8 characters.\n\u2022 Include one uppercase letter.\n\u2022 Include one number.'),
+      findsOneWidget,
+    );
+    await tester.enterText(password, 'river739');
+    await tester.pump();
+    expect(find.text('\u2022 Include one uppercase letter.'), findsOneWidget);
+    expect(find.textContaining('Use at least 8 characters'), findsNothing);
+    expect(find.textContaining('Include one number'), findsNothing);
+
+    await tester.enterText(password, 'River739');
+    await tester.pump();
+    expect(find.textContaining('Include one uppercase letter'), findsNothing);
+    expect(tester.widget<TextFormField>(password).controller!.text, 'River739');
+    expect(auth.createCalls, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('signup sends a compliant eight-character password unchanged', (
+    tester,
+  ) async {
+    await showAuth(tester);
+    await register(tester, password: 'River739');
+    expect(auth.createCalls, 1);
+    expect(auth.lastCreatedPassword, 'River739');
+    expect(user.verificationCalls, 1);
+    expectNoSession();
+  });
 
   testWidgets('a profile read failure signs out before re-enabling the form', (
     tester,
@@ -523,6 +587,7 @@ class _TestAuth extends _TestDouble implements FirebaseAuth {
   int createCalls = 0;
   int signOutCalls = 0;
   String? lastPassword;
+  String? lastCreatedPassword;
 
   @override
   User? get currentUser => _currentUser;
@@ -546,6 +611,7 @@ class _TestAuth extends _TestDouble implements FirebaseAuth {
     required String password,
   }) async {
     createCalls++;
+    lastCreatedPassword = password;
     if (createGate != null) await createGate!.future;
     if (createError != null) throw createError!;
     _currentUser = user;

@@ -1,11 +1,17 @@
-// Used only when creating an account, not to validate existing credentials.
+const newPasswordRequirements =
+    'Use at least 8 characters, including one uppercase letter and one number.';
+
+// Used only when setting a new password, not to validate existing credentials.
 String? validateNewPassword(String? value) {
   if (value == null || value.trim().isEmpty) {
     return 'Enter your password.';
   }
-  if (value.runes.length < 8) {
-    return 'Use at least 8 characters.';
-  }
+  final unmetRequirements = <String>[
+    if (value.runes.length < 8) '\u2022 Use at least 8 characters.',
+    if (!RegExp(r'[A-Z]').hasMatch(value)) '\u2022 Include one uppercase letter.',
+    if (!RegExp(r'[0-9]').hasMatch(value)) '\u2022 Include one number.',
+  ];
+  if (unmetRequirements.isNotEmpty) return unmetRequirements.join('\n');
 
   // Normalize only for comparison. The password sent to Firebase stays intact.
   final lowercase = value.trim().toLowerCase();
@@ -14,7 +20,7 @@ String? validateNewPassword(String? value) {
   if (lowercase.runes.toSet().length == 1 ||
       _commonPasswords.contains(comparison) ||
       _commonPasswords.contains(withoutNumberSuffix)) {
-    return 'This password is too common. Choose a different one.';
+    return '\u2022 This password is too common. Choose a different one.';
   }
   return null;
 }
